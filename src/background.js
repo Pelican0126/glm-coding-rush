@@ -70,8 +70,10 @@ try {
       triggerStrategy: "hybrid",
       advanceMs: 150,
       pollIntervalMs: 350,
+      reloadIntervalMs: 1200,
       retryUntil: "10:02:00",
-      dualTab: true,
+      retryWindowMs: 120000,
+      dualTab: false,
       takeoverMs: 800,
       stopPoint: "hold", // hold=过验证码后自动点确认支付占位并停在支付页；beforeConfirm=停在确认支付按钮前
       execStrategy: "dom",
@@ -453,6 +455,40 @@ try {
     });
   }
 
+  // 重新加载标签并等待其加载完成。
+  // 用途：把内容脚本注入到「扩展加载/更新前就已经打开」的标签（这种标签不会自动注入 content script）。
+  function reloadTabAndWait(tabId, timeoutMs) {
+    return new Promise(function (resolve) {
+      if (!tabId) { resolve(false); return; }
+      var done = false;
+      var timer = setTimeout(function () {
+        if (!done) { done = true; cleanup(); resolve(false); }
+      }, timeoutMs || 8000);
+      function cleanup() {
+        try { chrome.tabs.onUpdated.removeListener(listener); } catch (e) {}
+      }
+      function listener(id, info) {
+        if (id === tabId && info && info.status === "complete") {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            cleanup();
+            // 给 document_idle 的内容脚本一点注册时间
+            setTimeout(function () { resolve(true); }, 800);
+          }
+        }
+      }
+      try {
+        chrome.tabs.onUpdated.addListener(listener);
+        chrome.tabs.reload(tabId, { bypassCache: true }, function () { void chrome.runtime.lastError; });
+      } catch (e) {
+        clearTimeout(timer);
+        cleanup();
+        resolve(false);
+      }
+    });
+  }
+
   // 是否为目标抢购页（glm-coding）
   function isPurchaseUrl(url) {
     return typeof url === "string" && url.indexOf("open.bigmodel.cn/glm-coding") !== -1;
@@ -465,7 +501,10 @@ try {
    */
   async function ensureTabs(config) {
     var maxTabs = Math.min(2, Math.max(1, config.maxTabs || 1));
-    var wantBackup = !!config.dualTab && maxTabs >= 2;
+    // 热备（双标签）暂强制停用：当前实现与"刷新驱动重试"有竞态（共享 runFlag 角色错乱 +
+    // 看门狗误接管），单账号下有双下单风险。重写为可靠版前一律走单标签，忽略 config.dualTab。
+    var wantBackup = false;
+    void maxTabs;
 
     var existing = await queryTabsByUrl();
     // 优先选已在 glm-coding 的标签
@@ -597,14 +636,15 @@ try {
     await setState({ status: "preheat", role: { leaderTabId: primaryTabId } });
 
     // leader：正常下单角色
-    var okLeader = await sendToTab(primaryTabId, {
-      type: "go",
-      config: config,
-      target: target,
-      fireAt: fireAt,
-      role: "leader"
-    });
-    L.info("go", "已向 leader(tab " + primaryTabId + ") 下发 go，fireAt=" + fireAt + (okLeader ? "" : " (未确认，content 可能未就绪)"));
+    var goMsg = { type: "go", config: config, target: target, fireAt: fireAt, role: "leader" };
+    var okLeader = await sendToTab(primaryTabId, goMsg);
+    if (!okLeader) {
+      // 标签里没有内容脚本（最常见：扩展加载/更新后这个标签没刷新过）→ 刷新注入再发一次
+      L.warn("go", "leader(tab " + primaryTabId + ") 无内容脚本，刷新该标签注入后重试（扩展加载后需刷新页面）");
+      await reloadTabAndWait(primaryTabId);
+      okLeader = await sendToTab(primaryTabId, goMsg);
+    }
+    L.info("go", "已向 leader(tab " + primaryTabId + ") 下发 go，fireAt=" + fireAt + (okLeader ? "" : " (仍未确认，请手动刷新该标签后重抢)"));
 
     // backup：观察角色（不提交，等待 becomeLeader）
     if (backupTabId) {
@@ -626,7 +666,8 @@ try {
   function startWatchdog(takeoverMs) {
     stopWatchdog();
     if (!_backupTabId) return;
-    var threshold = Math.max(300, takeoverMs || 800);
+    // 阈值至少 5s：刷新驱动重试时 leader 每次刷新都会"静默"~1s，过低阈值会误判为卡死并反复接管。
+    var threshold = Math.max(5000, takeoverMs || 800);
     // 用短周期 setInterval（SW 在本轮活跃期间存活；alarm 兜底见 onAlarm）
     _watchdogTimer = setInterval(async function () {
       try {
@@ -809,7 +850,7 @@ try {
           if (_runActive && !_takenOver && !_committed && _backupTabId) {
             var idle = Date.now() - _lastLeaderSignalAt;
             var cfg = await getConfig();
-            if (idle > Math.max(300, cfg.takeoverMs || 800)) {
+            if (idle > Math.max(5000, cfg.takeoverMs || 800)) {
               _takenOver = true;
               L.warn("takeover", "[alarm] leader 静默，backup 接管");
               await setState({ role: { leaderTabId: _backupTabId } });

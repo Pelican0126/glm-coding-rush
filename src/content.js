@@ -168,6 +168,19 @@
   }
   function nowSrv() { return T.now(ME.offsetMs); }
 
+  // 生成"干净"的刷新 URL：清掉历史累积的 _h/_r/_s/_ts 缓存破坏参数，只留一个最新的，避免 URL 无限膨胀。
+  function reloadFreshUrl() {
+    try {
+      var u = new URL(location.href);
+      ["_h", "_r", "_s", "_ts"].forEach(function (k) { u.searchParams.delete(k); });
+      u.searchParams.set("_h", String(Date.now()));
+      return u.toString();
+    } catch (e) {
+      var base = location.href.split("#")[0].split("?")[0];
+      return base + "?_h=" + Date.now();
+    }
+  }
+
   // 缓存键： site:tier:period
   function cacheKey(tier, period) { return SITE + ":" + tier + ":" + period; }
 
@@ -524,12 +537,12 @@
 
   function isPastRetryUntil() {
     try {
-      var ru = ME.config && ME.config.retryUntil;
-      if (!ru) return false;
-      // retryUntil 是 "HH:MM:SS"，与 fireAt 同一天。基于 fireAt 推出当天截止的服务器纪元毫秒。
-      var cutoff = sameDayServerEpoch(ME.fireAt, ru);
-      if (!cutoff) return false;
-      return nowSrv() >= cutoff;
+      // 重试窗口相对「开抢时刻 fireAt」计算（默认 120s）。
+      // 不用绝对 HH:MM:SS：否则手动开抢/非整点测试时，server-now 可能早已越过该钟点而瞬间停止
+      // （例如本机时钟慢 2 分钟时，10:00 开抢、绝对 retryUntil=10:02，服务器实际已过 10:02 → 秒停）。
+      if (!ME.fireAt) return false;
+      var win = (ME.config && ME.config.retryWindowMs) || 120000;
+      return nowSrv() >= (ME.fireAt + win);
     } catch (e) { return false; }
   }
 
@@ -713,10 +726,9 @@
     // 硬刷新（带 cache-busting）。刷新前落盘运行标志以便断点恢复。
     log("warn", "rate", "软恢复不可用，执行硬刷新（cache-busting）");
     saveRunFlag(ME.clickedBuy ? "clicked-buy" : "running");
-    var url = location.href.split("#")[0];
-    var bust = (url.indexOf("?") === -1 ? "?" : "&") + "_r=" + Date.now();
+    var target = reloadFreshUrl();
     setTimeout(function () {
-      try { location.replace(url + bust + location.hash); } catch (e) { try { location.reload(); } catch (e2) {} }
+      try { location.replace(target); } catch (e) { try { location.reload(); } catch (e2) {} }
     }, jitter(RELOAD_FLOOR_MS));
   }
 
@@ -734,29 +746,29 @@
     return false;
   }
 
-  // ---- 售罄/未翻转：分级重试（hybrid 周期性刷新） ----
+  // ---- 售罄/未翻转：刷新驱动重试（点击抢→售罄→刷新→再抢） ----
   function onSoldOut(entry, btn) {
     sendBg("soldOut");
     setStatus("sold-out-retry");
 
-    // hybrid 策略：周期性硬刷新以打破 SPA 缓存的售罄态（受 reload 地板限制）
+    // 很多限量「售罄态」要刷新后才翻牌，故售罄即按「刷新周期」硬刷新拉取最新库存。
+    // hybrid / reload 策略都走刷新；observe 策略只原地轮询（靠 MutationObserver 捕获反应式翻转）。
     var strat = (ME.config && ME.config.triggerStrategy) || "hybrid";
-    if (strat === "hybrid") {
+    if (strat === "hybrid" || strat === "reload") {
+      var cycle = (ME.config && ME.config.reloadIntervalMs) || 1200; // 刷新周期，默认 ~1.2s
       var since = Date.now() - ME.lastReloadAt;
-      // 每 ~5s 触发一次刷新（且不早于 reload 地板）
-      if (since > Math.max(5000, RELOAD_FLOOR_MS) && ME.attempts > FAST_ATTEMPTS) {
+      if (since > Math.max(RELOAD_FLOOR_MS, cycle)) {
         ME.lastReloadAt = Date.now();
-        log("info", "soldout", "hybrid 周期刷新以刷新售罄态");
+        log("info", "soldout", "售罄 → 刷新页面再抢（刷新驱动，周期≈" + cycle + "ms）");
         saveRunFlag("running");
-        var url = location.href.split("#")[0];
-        var bust = (url.indexOf("?") === -1 ? "?" : "&") + "_h=" + Date.now();
+        var target = reloadFreshUrl();
         setTimeout(function () {
-          try { location.replace(url + bust + location.hash); } catch (e) { try { location.reload(); } catch (e2) {} }
+          try { location.replace(target); } catch (e) { try { location.reload(); } catch (e2) {} }
         }, jitter(RELOAD_FLOOR_MS));
         return;
       }
     }
-    // 否则继续轮询检测（DOM/数据层翻转会被立即捕获）
+    // 刷新周期未到（或 observe 策略）：原地轮询，反应式翻转会被 MutationObserver/poll 立即捕获
     scheduleNextAttempt();
   }
 
@@ -1132,7 +1144,7 @@
     ME.running = true;
     setStatus("running");
     saveRunFlag(ME.clickedBuy ? "clicked-buy" : "running");
-    log("success", "loop", "进入抢购循环（attempts 上限=" + MAX_ATTEMPTS + "，retryUntil=" + (ME.config.retryUntil || "-") + "）");
+    log("success", "loop", "进入抢购循环（attempts 上限=" + MAX_ATTEMPTS + "，重试窗口=" + Math.round(((ME.config && ME.config.retryWindowMs) || 120000) / 1000) + "s，自 fireAt 起算）");
     // 立即开第一拍
     tryBuy();
   }
