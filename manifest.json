@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "GLM Coding 抢购助手",
+  "version": "1.0.0",
+  "description": "在已登录的 bigmodel 标签页内，于每日开售时刻检测补货并自动点击购买，验证码交由人工完成后自动下单占位（停在支付页，绝不自动付款/破解验证码）。",
+  "permissions": ["storage", "alarms", "notifications", "tabs", "scripting"],
+  "host_permissions": [
+    "https://open.bigmodel.cn/*",
+    "https://bigmodel.cn/*",
+    "https://*.bigmodel.cn/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "GLM Coding 抢购助手",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon128.png", "icons/icon48.png", "icons/icon16.png"],
+      "matches": ["https://open.bigmodel.cn/*", "https://bigmodel.cn/*"]
+    }
+  ],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://open.bigmodel.cn/*", "https://bigmodel.cn/*"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "js": ["src/vuebridge.js"]
+    },
+    {
+      "matches": ["https://open.bigmodel.cn/*", "https://bigmodel.cn/*"],
+      "run_at": "document_idle",
+      "js": ["src/selectors.js", "src/logger.js", "src/timesync.js", "src/content.js"]
+    }
+  ]
+}

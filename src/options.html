@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GLM Coding 抢购助手 — 设置</title>
+  <style>
+    /* ===== 基础主题：扁平、暗/亮自适应 ===== */
+    :root {
+      --bg: #f5f6f8;
+      --panel: #ffffff;
+      --panel-2: #fafbfc;
+      --border: #e3e6ea;
+      --text: #1f2329;
+      --text-dim: #6b7280;
+      --accent: #2f6bff;
+      --accent-weak: #e8f0ff;
+      --danger: #e5484d;
+      --ok: #18a058;
+      --warn: #d97706;
+      --input-bg: #ffffff;
+      --input-border: #d4d8de;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+      --radius: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #15171b;
+        --panel: #1d2026;
+        --panel-2: #22262d;
+        --border: #2c313a;
+        --text: #e6e8eb;
+        --text-dim: #9aa3af;
+        --accent: #5b8bff;
+        --accent-weak: #1f2a44;
+        --danger: #ff6166;
+        --ok: #4cc38a;
+        --warn: #f0a13a;
+        --input-bg: #14161a;
+        --input-border: #353b45;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 20px 80px;
+    }
+    header.page {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+    header.page h1 {
+      font-size: 20px;
+      margin: 0;
+      font-weight: 650;
+    }
+    header.page .sub {
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+    .intro {
+      color: var(--text-dim);
+      font-size: 12.5px;
+      margin: 6px 0 20px;
+    }
+
+    /* ===== 卡片分区 ===== */
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .section > h2 {
+      font-size: 14px;
+      font-weight: 650;
+      margin: 0;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-2);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section > h2 .badge {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--warn);
+      border: 1px solid var(--warn);
+      border-radius: 6px;
+      padding: 0 6px;
+      line-height: 16px;
+    }
+    .section-body { padding: 8px 16px 16px; }
+
+    /* ===== 表单行 ===== */
+    .field {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px dashed var(--border);
+    }
+    .field:last-child { border-bottom: none; }
+    .field > label.k {
+      font-weight: 550;
+      padding-top: 6px;
+      font-size: 13px;
+    }
+    .field .v { min-width: 0; }
+    .field .hint {
+      color: var(--text-dim);
+      font-size: 11.5px;
+      margin-top: 4px;
+    }
+    .field .err {
+      color: var(--danger);
+      font-size: 11.5px;
+      margin-top: 4px;
+      display: none;
+    }
+    .field.invalid .err { display: block; }
+    .field.invalid input,
+    .field.invalid textarea,
+    .field.invalid select {
+      border-color: var(--danger) !important;
+    }
+
+    /* ===== 控件样式 ===== */
+    input[type="text"],
+    input[type="number"],
+    input[type="time"],
+    select,
+    textarea {
+      width: 100%;
+      background: var(--input-bg);
+      color: var(--text);
+      border: 1px solid var(--input-border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-weak);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 76px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    input.short { max-width: 160px; }
+    input.tiny { max-width: 110px; }
+    .inline-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      align-items: center;
+    }
+    .with-unit {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .with-unit .unit { color: var(--text-dim); font-size: 12px; }
+
+    /* ===== 单选 / 复选 ===== */
+    .radio-group { display: flex; flex-direction: column; gap: 8px; }
+    .radio-opt,
+    .check-opt {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .radio-opt input,
+    .check-opt input { margin-top: 3px; }
+    .radio-opt .ttl,
+    .check-opt .ttl { font-weight: 550; font-size: 13px; }
+    .radio-opt .dsc,
+    .check-opt .dsc { color: var(--text-dim); font-size: 11.5px; }
+
+    /* ===== Toggle 开关 ===== */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex: 0 0 auto;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .track {
+      position: absolute;
+      inset: 0;
+      background: var(--input-border);
+      border-radius: 22px;
+      transition: background 0.15s;
+    }
+    .switch .track::before {
+      content: "";
+      position: absolute;
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.15s;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    .switch input:checked + .track { background: var(--accent); }
+    .switch input:checked + .track::before { transform: translateX(18px); }
+    .toggle-line { display: flex; align-items: center; gap: 10px; }
+    .toggle-line .lbl { font-size: 13px; }
+
+    /* ===== 底部操作栏 ===== */
+    .actionbar {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      box-shadow: 0 -1px 4px rgba(16, 24, 40, 0.06);
+      padding: 12px 0;
+      z-index: 20;
+    }
+    .actionbar .inner {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    button.btn {
+      border: 1px solid var(--input-border);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.btn:hover { border-color: var(--accent); }
+    button.btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button.btn.primary:hover { filter: brightness(1.05); }
+    .actionbar .status {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      margin-left: auto;
+      min-height: 18px;
+    }
+    .actionbar .status.ok { color: var(--ok); }
+    .actionbar .status.err { color: var(--danger); }
+
+    .safety-note {
+      margin-top: 8px;
+      font-size: 11.5px;
+      color: var(--text-dim);
+      background: var(--accent-weak);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="page">
+      <h1>GLM Coding 抢购助手</h1>
+      <span class="sub">设置中心</span>
+    </header>
+    <p class="intro">
+      在已登录的 bigmodel 标签页内，于每日开售时刻检测补货并自动点击购买；
+      验证码交由人工完成后自动下单占位，停在支付页 —— 绝不自动付款、绝不破解验证码。
+    </p>
+
+    <!-- ============ 1. 抢购目标 ============ -->
+    <section class="section">
+      <h2>抢购目标</h2>
+      <div class="section-body">
+        <div class="field" data-field="site">
+          <label class="k" for="f-site">站点</label>
+          <div class="v">
+            <select id="f-site">
+              <option value="bigmodel">bigmodel（open.bigmodel.cn）</option>
+            </select>
+            <div class="hint">当前仅支持 bigmodel GLM Coding Plan。</div>
+            <div class="err">站点无效。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="tier">
+          <label class="k" for="f-tier">套餐等级 (tier)</label>
+          <div class="v">
+            <select id="f-tier">
+              <option value="lite">Lite</option>
+              <option value="pro">Pro</option>
+              <option value="max">Max</option>
+            </select>
+            <div class="hint">对应 allCardDataList 中的 type 字段。</div>
+            <div class="err">请选择套餐等级。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="period">
+          <label class="k" for="f-period">订阅周期 (period)</label>
+          <div class="v">
+            <select id="f-period">
+              <option value="month">月 (month)</option>
+              <option value="quarter">季 (quarter)</option>
+              <option value="year">年 (year)</option>
+            </select>
+            <div class="hint">对应 allCardDataList 中的 unit 字段。</div>
+            <div class="err">请选择订阅周期。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="coupon">
+          <label class="k" for="f-coupon">优惠码 / 邀请码</label>
+          <div class="v">
+            <input type="text" id="f-coupon" class="short" placeholder="可留空" />
+            <div class="hint">下单时作为 invitationCode 传入（可选）。</div>
+            <div class="err"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 2. 时间与触发 ============ -->
+    <section class="section">
+      <h2>时间与触发</h2>
+      <div class="section-body">
+        <div class="field" data-field="dropTime">
+          <label class="k" for="f-dropTime">开售时刻</label>
+          <div class="v">
+            <input type="time" id="f-dropTime" class="tiny" step="1" />
+            <div class="hint">每日补货时刻，格式 HH:MM:SS，默认 10:00:00。</div>
+            <div class="err">时间格式应为 HH:MM:SS。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="timezone">
+          <label class="k" for="f-timezone">时区</label>
+          <div class="v">
+            <select id="f-timezone">
+              <option value="Asia/Shanghai">Asia/Shanghai（北京时间）</option>
+              <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+              <option value="UTC">UTC</option>
+            </select>
+            <div class="hint">开售时刻基于此时区计算下一次触发。</div>
+            <div class="err">时区无效。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="triggerStrategy">
+          <label class="k" for="f-triggerStrategy">触发策略</label>
+          <div class="v">
+            <select id="f-triggerStrategy">
+              <option value="hybrid">hybrid（观察 + 周期刷新，推荐）</option>
+              <option value="observe">observe（仅观察，不刷新）</option>
+              <option value="reload">reload（周期刷新为主）</option>
+            </select>
+            <div class="hint">hybrid 会以 MutationObserver 观察翻转，并在售罄时周期性刷新。</div>
+            <div class="err">触发策略无效。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="advanceMs">
+          <label class="k" for="f-advanceMs">提前量 advanceMs</label>
+          <div class="v">
+            <div class="with-unit">
+              <input type="number" id="f-advanceMs" class="tiny" min="0" max="2000" step="10" />
+              <span class="unit">毫秒</span>
+            </div>
+            <div class="hint">在 T0 之前 advanceMs 毫秒进入开抢自旋，用于补偿秒级时间同步误差（默认 150）。</div>
+            <div class="err">应为 0 ~ 2000 的整数。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="pollIntervalMs">
+          <label class="k" for="f-pollIntervalMs">轮询间隔 pollIntervalMs</label>
+          <div class="v">
+            <div class="with-unit">
+              <input type="number" id="f-pollIntervalMs" class="tiny" min="250" max="5000" step="10" />
+              <span class="unit">毫秒</span>
+            </div>
+            <div class="hint">售罄重试 / 刷新的基础间隔（带 ±30% 抖动）。防滥用下限 250ms。</div>
+            <div class="err">应为 ≥ 250 的整数（防滥用下限）。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="retryUntil">
+          <label class="k" for="f-retryUntil">重试截止时刻</label>
+          <div class="v">
+            <input type="time" id="f-retryUntil" class="tiny" step="1" />
+            <div class="hint">到此时刻仍未抢到则停止重试，格式 HH:MM:SS，默认 10:02:00。</div>
+            <div class="err">时间格式应为 HH:MM:SS，且应晚于开售时刻。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="dailyRearm">
+          <label class="k">每日自动续期</label>
+          <div class="v">
+            <div class="toggle-line">
+              <label class="switch">
+                <input type="checkbox" id="f-dailyRearm" />
+                <span class="track"></span>
+              </label>
+              <span class="lbl">未抢到 / 抢购结束后，自动安排次日再抢</span>
+            </div>
+            <div class="hint">开启后浏览器重启也会在启动时重新排程。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 3. 下单与停点 ============ -->
+    <section class="section">
+      <h2>下单与停点</h2>
+      <div class="section-body">
+        <div class="field" data-field="stopPoint">
+          <label class="k">停点策略</label>
+          <div class="v">
+            <div class="radio-group">
+              <label class="radio-opt">
+                <input type="radio" name="stopPoint" value="hold" />
+                <span>
+                  <span class="ttl">hold（默认）— 占位保留库存</span>
+                  <span class="dsc">人工通过验证码后，自动点击「确认支付」生成订单（create-sign）以占住库存，随后停在支付页。绝不自动付款。</span>
+                </span>
+              </label>
+              <label class="radio-opt">
+                <input type="radio" name="stopPoint" value="beforeConfirm" />
+                <span>
+                  <span class="ttl">beforeConfirm — 停在确认前</span>
+                  <span class="dsc">停在支付弹窗，不点击「确认支付」，完全由你手动操作。</span>
+                </span>
+              </label>
+            </div>
+            <div class="err">请选择停点策略。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="execStrategy">
+          <label class="k">执行方式</label>
+          <div class="v">
+            <div class="radio-group">
+              <label class="radio-opt">
+                <input type="radio" name="execStrategy" value="dom" />
+                <span>
+                  <span class="ttl">DOM（默认）— 模拟点击</span>
+                  <span class="dsc">通过点击页面按钮触发购买与下单，行为最贴近真人。</span>
+                </span>
+              </label>
+              <label class="radio-opt">
+                <input type="radio" name="execStrategy" value="api" />
+                <span>
+                  <span class="ttl">接口直发（高级）</span>
+                  <span class="dsc">直接调用页面接口，速度更快但风险更高，仅供高级用户在理解风险后使用。</span>
+                </span>
+              </label>
+            </div>
+            <div class="err">请选择执行方式。</div>
+          </div>
+        </div>
+
+        <div class="safety-note">
+          安全约束：本助手永不破解 / 绕过验证码，永不进入真实的支付宝 / 微信付款流程，仅单账号、最多 2 个标签页。
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 4. 双标签 ============ -->
+    <section class="section">
+      <h2>双标签</h2>
+      <div class="section-body">
+        <div class="field" data-field="dualTab">
+          <label class="k">热备标签页</label>
+          <div class="v">
+            <div class="toggle-line">
+              <label class="switch">
+                <input type="checkbox" id="f-dualTab" />
+                <span class="track"></span>
+              </label>
+              <span class="lbl">开启主 + 备双标签（主抢、备观察）</span>
+            </div>
+            <div class="hint">备用标签仅观察；主标签卡顿超过接管阈值后自动接管。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="takeoverMs">
+          <label class="k" for="f-takeoverMs">接管阈值 takeoverMs</label>
+          <div class="v">
+            <div class="with-unit">
+              <input type="number" id="f-takeoverMs" class="tiny" min="200" max="5000" step="50" />
+              <span class="unit">毫秒</span>
+            </div>
+            <div class="hint">主标签停滞超过此时长，备用标签升级为 leader 接管（默认 800）。</div>
+            <div class="err">应为 200 ~ 5000 的整数。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="maxTabs">
+          <label class="k" for="f-maxTabs">最大标签数</label>
+          <div class="v">
+            <input type="number" id="f-maxTabs" class="tiny" min="1" max="2" step="1" />
+            <div class="hint">防滥用上限：最多 2 个标签页。</div>
+            <div class="err">应为 1 或 2。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 5. 提醒 ============ -->
+    <section class="section">
+      <h2>提醒</h2>
+      <div class="section-body">
+        <div class="field" data-field="sound">
+          <label class="k">声音提醒</label>
+          <div class="v">
+            <div class="toggle-line">
+              <label class="switch">
+                <input type="checkbox" id="f-sound" />
+                <span class="track"></span>
+              </label>
+              <span class="lbl">验证码出现 / 到达支付页时循环蜂鸣（WebAudio）</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="field" data-field="notify">
+          <label class="k">系统通知</label>
+          <div class="v">
+            <div class="toggle-line">
+              <label class="switch">
+                <input type="checkbox" id="f-notify" />
+                <span class="track"></span>
+              </label>
+              <span class="lbl">关键节点弹出 Chrome 系统通知</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 6. 高级 ============ -->
+    <section class="section">
+      <h2>高级 <span class="badge">谨慎修改</span></h2>
+      <div class="section-body">
+        <div class="field" data-field="selectorOverrides">
+          <label class="k" for="f-selectorOverrides">选择器覆盖</label>
+          <div class="v">
+            <textarea id="f-selectorOverrides" placeholder='JSON 对象，例如：&#10;{ "BUY_BTN": "button.buy-btn", "CONFIRM_PAY": ".confirm-pay-btn" }'></textarea>
+            <div class="hint">JSON 对象；站点改版时可临时覆盖默认选择器。留空表示不覆盖。</div>
+            <div class="err">必须是合法的 JSON 对象。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="fallbackList">
+          <label class="k" for="f-fallbackList">候补目标列表</label>
+          <div class="v">
+            <textarea id="f-fallbackList" placeholder='JSON 数组，例如：&#10;[ { "tier": "pro", "period": "quarter" }, { "tier": "lite", "period": "month" } ]'></textarea>
+            <div class="hint">主目标售罄时按顺序尝试的候补 {tier, period} 列表。JSON 数组，可留空。</div>
+            <div class="err">必须是合法的 JSON 数组，每项含 tier 与 period。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 底部操作栏 ============ -->
+  <div class="actionbar">
+    <div class="inner">
+      <button class="btn primary" id="btn-save" type="button">保存设置</button>
+      <button class="btn" id="btn-reset" type="button">恢复默认</button>
+      <span class="status" id="status"></span>
+    </div>
+  </div>
+
+  <!-- 先加载共享库（设置 self.GLM），再加载页面脚本 -->
+  <script src="logger.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
