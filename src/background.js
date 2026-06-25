@@ -46,6 +46,7 @@ try {
   // ===== 常量 =====
   var SITE_URL = "https://open.bigmodel.cn/glm-coding";
   var TIME_SYNC_URL = "https://open.bigmodel.cn/glm-coding";
+  var RUN_FLAG_KEY = "runFlag"; // 与 content.js 一致：断点恢复标志键（disarm 时由 background 直接清）
   var LOGS_CAP = 1000; // 日志环形缓冲上限（长跑窗口下保留更多历史）
   var ALARM_NAME = "glm-fire"; // 主调度 alarm
   var PREHEAT_ALARM = "glm-preheat"; // 预热（开标签+再同步）alarm
@@ -755,8 +756,16 @@ try {
     _takenOver = false;
     _leaderTabId = 0;
     _backupTabId = 0;
+    // 关键：在 background 侧直接清掉 runFlag。否则 tab 正在 location.replace 过程中时，
+    // stop 消息送达失败 → content 不执行 clearRunFlag → 残留 runFlag 被刷新后的新 content 读到
+    // 又恢复抢购，造成"撤防了还在刷"。
+    try {
+      var rf = {};
+      rf[RUN_FLAG_KEY] = null;
+      await setLocal(rf);
+    } catch (e) {}
     var state = await getState();
-    // 通知正在跑的标签停止
+    // 通知正在跑的标签停止（best-effort；即便消息丢失，runFlag 已清，刷新后也不会再恢复）
     try {
       if (state.role) {
         if (state.role.primaryTabId) sendToTab(state.role.primaryTabId, { type: "stop" });

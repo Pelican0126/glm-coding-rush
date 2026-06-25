@@ -73,7 +73,8 @@
     beepTimer: null,               // 蜂鸣循环计时器
     banner: null,                  // 顶部大横幅
     retryTimer: null,              // 重试计时器句柄
-    pollTimer: null                // 等待验证码通过的轮询句柄
+    pollTimer: null,               // 等待验证码通过的轮询句柄
+    reloadTimer: null              // 售罄/限流刷新排队的 setTimeout 句柄（stop 时需拦掉，防撤防后仍刷新）
   };
 
   // storage 中的运行进度标志键（断点恢复用）
@@ -152,6 +153,7 @@
         fallbackIndex: ME.fallbackIndex || 0,
         soldOutRounds: ME.soldOutRounds || 0,
         noCardRounds: ME.noCardRounds || 0,
+        lastReloadAt: ME.lastReloadAt || 0, // 跨重载保留：避免刷新后 lastReloadAt 归零使退避判定的 since 恒为天文数字
         ts: Date.now()
       };
       var o = {}; o[RUN_FLAG_KEY] = flag;
@@ -806,7 +808,11 @@
     log("warn", "rate", "软恢复不可用，执行硬刷新（cache-busting）");
     saveRunFlag(ME.clickedBuy ? "clicked-buy" : "running");
     var target = reloadFreshUrl();
-    setTimeout(function () {
+    ME._reloadPending = true;
+    if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+    ME.reloadTimer = setTimeout(function () {
+      ME.reloadTimer = null;
+      ME._reloadPending = false;
       try { location.replace(target); } catch (e) { try { location.reload(); } catch (e2) {} }
     }, jitter(RELOAD_FLOOR_MS));
   }
@@ -894,21 +900,38 @@
         cycle = Math.max(cycle, backoff);
       }
 
+      // 无卡片时不刷新：document_idle 注入瞬间 Vue 尚未挂载、.buy-btn 还没渲染，此时判「无卡片」
+      // 并刷新会形成"刷新→未渲染→再刷新"死循环，永远轮不到卡片出现，也轮不到补货翻转检测。
+      // 改为短轮询等卡片渲染就绪；只有「有卡片但售罄」才按周期刷新拉最新库存。
+      if (!present) {
+        ME.noCardRounds = (ME.noCardRounds || 0) + 1;
+        if (backedOff) {
+          log("warn", "rate", "连续 " + ME.noCardRounds + " 轮无卡片(疑似软限流)，原地等待卡片渲染（不刷新），退避≈" + cycle + "ms");
+        } else {
+          log("info", "soldout", "无卡片(页面未渲染完)，原地轮询等待卡片就绪（不刷新）");
+        }
+        // 用较快的轮询等卡片出现；一旦出现，下一拍 onSoldOut 即会进入"有卡片"分支正常处理。
+        if (ME.retryTimer) { clearTimeout(ME.retryTimer); }
+        ME.retryTimer = setTimeout(function () {
+          ME.retryTimer = null;
+          if (ME.running && !ME.finished && !ME.clickedBuy) tryBuy();
+        }, Math.min(cycle, 800));
+        return;
+      }
+
+      // 有卡片（售罄）→ 按刷新周期硬刷新拉最新库存
       var since = Date.now() - ME.lastReloadAt;
       if (since > Math.max(RELOAD_FLOOR_MS, cycle)) {
         ME.lastReloadAt = Date.now();
-        if (!present) {
-          ME.noCardRounds = (ME.noCardRounds || 0) + 1;
-          if (backedOff) {
-            log("warn", "rate", "连续 " + ME.noCardRounds + " 轮无卡片(疑似软限流)，刷新间隔退避≈" + cycle + "ms 等接口恢复");
-          }
-        } else {
-          maybeFallbackSwitch(); // 仅在「有卡片但售罄」时计入档位降级；无卡片不算售罄轮
-        }
-        log("info", "soldout", (present ? "售罄" : "无卡片") + " → 刷新页面再抢（周期≈" + cycle + "ms）");
+        maybeFallbackSwitch(); // 有卡片但售罄，计入档位降级
+        log("info", "soldout", "售罄 → 刷新页面再抢（周期≈" + cycle + "ms）");
         saveRunFlag("running");
         var target = reloadFreshUrl();
-        setTimeout(function () {
+        ME._reloadPending = true; // 标记：刷新已排队，stop 收到时需拦掉
+        if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+        ME.reloadTimer = setTimeout(function () {
+          ME.reloadTimer = null;
+          ME._reloadPending = false;
           try { location.replace(target); } catch (e) { try { location.reload(); } catch (e2) {} }
         }, jitter(RELOAD_FLOOR_MS));
         return;
@@ -1266,7 +1289,11 @@
     stopBeepLoop();
     saveRunFlag("running");
     var target = reloadFreshUrl();
-    setTimeout(function () {
+    ME._reloadPending = true;
+    if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+    ME.reloadTimer = setTimeout(function () {
+      ME.reloadTimer = null;
+      ME._reloadPending = false;
       try { location.replace(target); } catch (e) { try { location.reload(); } catch (e2) {} }
     }, jitter(RELOAD_FLOOR_MS));
   }
@@ -1274,6 +1301,8 @@
   function cleanupTimers() {
     try { if (ME.retryTimer) { clearTimeout(ME.retryTimer); ME.retryTimer = null; } } catch (e) {}
     try { if (ME.pollTimer) { clearTimeout(ME.pollTimer); ME.pollTimer = null; } } catch (e) {}
+    try { if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); ME.reloadTimer = null; } } catch (e) {}
+    ME._reloadPending = false;
   }
 
   // ---------------------------------------------------------------------------
@@ -1340,7 +1369,11 @@
           log("info", "coupon", "注入邀请/优惠码 ic=" + _ic + "（重载使其在下单时生效）");
           saveRunFlag("countdown");
           var _icUrl = reloadFreshUrl(); // 已含 ic
-          setTimeout(function () {
+          ME._reloadPending = true;
+          if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+          ME.reloadTimer = setTimeout(function () {
+            ME.reloadTimer = null;
+            ME._reloadPending = false;
             try { location.replace(_icUrl); } catch (e) { try { location.reload(); } catch (e2) {} }
           }, 0);
           return;
@@ -1441,7 +1474,11 @@
           break;
 
         case "stop":
-          log("info", "msg", "收到 stop");
+          if (ME._reloadPending) {
+            log("warn", "stop", "收到 stop：拦截已排队但未执行的刷新，停止抢购");
+          } else {
+            log("info", "msg", "收到 stop");
+          }
           stopRun("stopped");
           hideBanner();
           stopBeepLoop();
@@ -1547,6 +1584,10 @@
           ME.fallbackIndex = flag.fallbackIndex || 0;
           ME.soldOutRounds = flag.soldOutRounds || 0;
           ME.noCardRounds = flag.noCardRounds || 0;
+          // 还原上次刷新时间：刷新后 content 重新注入，lastReloadAt 本会归零导致
+          // onSoldOut 里 since = Date.now() - 0 恒成立 → 立即再刷新 → 死循环。
+          // 取「flag 落盘时刻」与「上次真实刷新时刻」中较新者，作为本轮"刚刷过"的基准。
+          ME.lastReloadAt = Math.max(flag.lastReloadAt || 0, flag.ts || 0) || Date.now();
           // countdown/preheat：仍按 fireAt 等待；其余阶段：直接恢复
           var resumePast = (flag.phase === "running" || flag.phase === "clicked-buy" ||
                             flag.phase === "captcha-wait" || flag.phase === "ordered");
