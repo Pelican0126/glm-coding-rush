@@ -162,6 +162,35 @@
     try { var o = {}; o[RUN_FLAG_KEY] = null; setLocal(o); } catch (e) {}
   }
 
+  // ===== 「本轮已发起下单(create-sign)」持久闸 —— 防本账号重复占单 =====
+  // 在 clickConfirmPay 真正点击「确认支付」后用 sessionStorage 按 fireAt 记一笔。
+  // location.replace 同源重载 / 用户手动刷新后 sessionStorage 仍在，故任何重载/恢复路径
+  // 再次进入 onBuyable/clickConfirmPay 都能据此拒绝二次下单。
+  // 仅在「明确无订单」(显式失败弹窗/纯竞价重抢)时由 retryAfterFail 清除，允许安全重抢。
+  var ORDER_FIRED_KEY = "glm_order_fired";
+  function markOrderFired() {
+    try { window.sessionStorage.setItem(ORDER_FIRED_KEY, String(ME.fireAt || 0)); } catch (e) {}
+  }
+  function orderAlreadyFired() {
+    try {
+      var v = window.sessionStorage.getItem(ORDER_FIRED_KEY);
+      return !!v && v === String(ME.fireAt || 0) && (ME.fireAt || 0) !== 0;
+    } catch (e) { return false; }
+  }
+  function clearOrderFired() {
+    try { window.sessionStorage.removeItem(ORDER_FIRED_KEY); } catch (e) {}
+  }
+  // 已疑似下单 → 停手交人工核对，绝不二次 create-sign（硬边界：宁可漏抢不可重复占单）。
+  function haltSuspectOrdered(reason) {
+    log("warn", "order", "本轮已发起过下单(" + reason + ") → 停手交人工核对，不再点击购买/确认(防重复占单)");
+    showBanner("⚠ 本轮疑似已下单 — 请人工核对订单/支付，勿重复购买、勿盲付", "#fb8c00");
+    try { startBeepLoop(); setTimeout(stopBeepLoop, 4000); } catch (e) {}
+    sendBg("orderCreated");
+    setStatus("ordered");
+    saveRunFlag("ordered");
+    finishRun("ordered", true);
+  }
+
   // ---------------------------------------------------------------------------
   // 工具
   // ---------------------------------------------------------------------------
@@ -561,9 +590,12 @@
       // 重试窗口相对「开抢时刻 fireAt」计算（默认 3600s=1 小时，options 可改）。
       // 不用绝对 HH:MM:SS：否则手动开抢/非整点测试时，server-now 可能早已越过该钟点而瞬间停止
       // （例如本机时钟慢 2 分钟时，10:00 开抢、绝对 retryUntil=10:02，服务器实际已过 10:02 → 秒停）。
-      if (!ME.fireAt) return false;
+      // 回退基准：fireAt 缺失(损坏/旧版 flag 恢复)时用 runLoop 首次进入时记的 startedAt，
+      // 保证时间窗仍能权威停止，不致只靠 MAX_ATTEMPTS 兜底而长时间空转。
+      var base = ME.fireAt || ME.startedAt || 0;
+      if (!base) return false;
       var win = (ME.config && ME.config.retryWindowMs) || 3600000;
-      return nowSrv() >= (ME.fireAt + win);
+      return nowSrv() >= (base + win);
     } catch (e) { return false; }
   }
 
@@ -636,9 +668,22 @@
       // 1.5) 校正视图（个人套餐 + 目标周期）。若刚发生切换，等下一拍让卡片重渲染后再判定，
       //      避免按错误周期的可见按钮定位/点击。
       if (!ME.clickedBuy && ensureTargetView()) {
+        // 防卡死：切换点击长期不生效(被遮挡 / Vue 每次重渲染回退选中态)时，会每拍重切→零进展→永不刷新。
+        // 连续多拍仍未就位 → 强制整页重载重置视图（重载后 init→startGoFlow 续跑）。
+        ME.viewSwitchStreak = (ME.viewSwitchStreak || 0) + 1;
+        if (ME.viewSwitchStreak > 12) {
+          log("warn", "view", "目标视图连续 " + ME.viewSwitchStreak + " 拍未切换成功 → 强制重载重置");
+          ME.viewSwitchStreak = 0;
+          ME.lastReloadAt = Date.now();
+          saveRunFlag("running");
+          var vt = reloadFreshUrl();
+          setTimeout(function () { try { location.replace(vt); } catch (e) { try { location.reload(); } catch (e2) {} } }, jitter(RELOAD_FLOOR_MS));
+          return;
+        }
         scheduleNextAttempt();
         return;
       }
+      ME.viewSwitchStreak = 0; // 视图已就位（或已 clickedBuy）→ 清零卡死计数
 
       // 2) 解析目标条目与按钮
       var entry = safe(function () { return S.resolveProduct ? S.resolveProduct(ME.target.tier, ME.target.period) : null; });
@@ -713,6 +758,9 @@
       return;
     }
 
+    // 本轮已发起过下单(create-sign) → 不再点击购买，停手交人工（防重复占单）
+    if (orderAlreadyFired()) { haltSuspectOrdered("onBuyable 入口"); return; }
+
     // 真实点击（去抖：避免重复触发）
     var nowT = Date.now();
     if (nowT - ME.lastClickAt < 120) { scheduleNextAttempt(); return; }
@@ -721,6 +769,7 @@
       log("success", "buy", "检测到可购买，点击购买按钮");
       btn.click();
       ME.clickedBuy = true;
+      ME.soldOutRounds = 0; // 本档已真可买并点击 → 清零档位降级计数（与 noCardRounds 的清零对称）
       saveRunFlag("clicked-buy");
       setStatus("captcha-wait");
       // 点击后页面将弹出腾讯验证码 -> 进入等待人工通过阶段
@@ -907,8 +956,14 @@
     if (ME.captchaWaiting) return;
     ME.captchaWaiting = true;
     setStatus("captcha-wait");
-    saveRunFlag(ME.config && ME.config.stopPoint === "beforeConfirm" ? "captcha-wait" : "captcha-wait");
+    saveRunFlag("captcha-wait");
     log("info", "captcha", "等待人工完成验证码…（绝不自动破解）");
+
+    // limbo 计时：仅累加「验证码未显示 + 无支付弹窗 + 无失败提示」的悬空时间；验证码一旦在显示、
+    // 或用户最近在操作(点滑块/输短信)就清零，故人工处理期间绝不超时。悬空超上限 → 点击疑似未生效/被抢
+    // → 回循环重抢，避免点一次后永久干等。CAP 取 45s（仅用于“点了但码压根没弹”的极端兜底，给慢网/多步过码留足余量）。
+    var limboMs = 0;
+    var LIMBO_CAP = 45000; // ~45s
 
     var poll = function () {
       if (ME.finished) return;
@@ -916,6 +971,10 @@
       var payOpen = safe(S.payDialogOpen);
 
       if (capOpen) {
+        limboMs = 0; // 验证码在显示，人工处理中，不计时
+        // 即便人工迟迟未过码，也不无限空转：超过重试时间窗则停手。用 stopRun(不刷新)，
+        // 避免把人工正在做的验证码会话冲掉（绝不在 capOpen 时 reload）。
+        if (isPastRetryUntil()) { log("warn", "captcha", "已过重试窗口仍未完成验证码，停止等待"); stopRun("stopped"); return; }
         // 验证码仍开 -> 确保提醒在响
         if (!ME.captchaAnnounced) announceCaptcha();
         // 心跳：让 background 的 _lastLeaderSignalAt 保持新鲜（防接管的第二道防线；
@@ -925,21 +984,27 @@
         return;
       }
 
-      // 过码后若弹出「库存不足/已售罄/手慢了/下单失败」等失败提示 → 立即重抢
+      // 过码后/点击后若弹出「库存不足/已售罄/手慢了/下单失败」等失败提示 → 立即重抢
       // （这正是"过码那几秒被别人抢走"的场景；orderFailed 只看 el-message/通知/对话框，
       //   不会把常驻的"暂时售罄"按钮误判为失败）。
       var failCap = safe(S.orderFailed);
       if (failCap) { retryAfterFail("过码后失败: " + failCap); return; }
 
-      // 验证码已关
-      if (payOpen) {
-        // 已推进到支付弹窗：验证码通过
-        onCaptchaPassed();
+      // 验证码已关且出现支付弹窗：验证码通过
+      if (payOpen) { onCaptchaPassed(); return; }
+
+      // 悬空：验证码未显示、无支付弹窗、无失败提示。给页面时间（点击后码可能稍后弹），但有上限。
+      // 人工活动抑制：用户最近 8s 内有交互（很可能正在过码而 isVisible 瞬时判负）→ 不计悬空，绝不误刷掉人工验证码。
+      if (ME._lastUserActAt && (Date.now() - ME._lastUserActAt) < 8000) {
+        limboMs = 0;
+        ME.pollTimer = setTimeout(poll, 250);
         return;
       }
-
-      // 验证码关了但支付弹窗还没出来：可能正在 preview。继续等一会儿。
-      // 若从未见过验证码且支付弹窗也没出现，给页面时间（点击后码可能稍后弹）。
+      limboMs += 250;
+      if (limboMs >= LIMBO_CAP) {
+        retryAfterFail("点击后约 " + Math.round(LIMBO_CAP / 1000) + "s 未见验证码/支付弹窗/失败提示(点击疑似未生效或被抢)");
+        return;
+      }
       ME.pollTimer = setTimeout(poll, 250);
     };
     ME.pollTimer = setTimeout(poll, 250);
@@ -975,19 +1040,29 @@
   }
 
   // ---- 点击确认支付（create-sign，占位下单），随后检测支付页 ----
-  function clickConfirmPay() {
+  function clickConfirmPay(tries) {
     if (ME.confirmClicked) return;
+    if (orderAlreadyFired()) { haltSuspectOrdered("clickConfirmPay 入口"); return; }
+    tries = tries || 0;
+    // 失败优先：preview/确认阶段若已弹失败(库存被抢) → 立即重抢，不要干等按钮
+    var failNow = safe(S.orderFailed);
+    if (failNow) { retryAfterFail("确认支付阶段失败: " + failNow); return; }
     var cp = safe(function () { return document.querySelector(S.CONFIRM_PAY); });
     if (!cp) {
-      // 弹窗可能还在渲染，重试几拍
-      log("info", "order", "未找到「确认支付」按钮，等待渲染…");
-      setTimeout(function () { if (!ME.finished) clickConfirmPay(); }, 200);
+      if (tries > 25) { // ~5s 仍无「确认支付」按钮(preview 可能失败/弹窗未出) → 回循环重抢，避免无上限干等死循环
+        log("warn", "order", "~5s 未出现「确认支付」按钮 → 视为下单未成立，回循环重抢");
+        retryAfterFail("未出现确认支付按钮");
+        return;
+      }
+      if (tries === 0) log("info", "order", "未找到「确认支付」按钮，等待渲染…");
+      setTimeout(function () { if (!ME.finished) clickConfirmPay(tries + 1); }, 200);
       return;
     }
     try {
       ME.confirmClicked = true;
       log("success", "order", "点击「确认支付」-> 触发 create-sign 占位下单");
       cp.click();
+      markOrderFired(); // click 已发出(create-sign 已触发) → 同步落盘「已下单」闸，防任何重载/恢复二次下单
       setStatus("ordered");
       sendBg("orderCreated");
       saveRunFlag("ordered");
@@ -996,7 +1071,8 @@
     } catch (e) {
       log("error", "order", "点击确认支付失败: " + (e && e.message));
       ME.confirmClicked = false;
-      setTimeout(function () { if (!ME.finished) clickConfirmPay(); }, 250);
+      if (tries > 10) { retryAfterFail("点击确认支付反复失败"); return; }
+      setTimeout(function () { if (!ME.finished) clickConfirmPay(tries + 1); }, 250);
     }
   }
 
@@ -1051,10 +1127,18 @@
         finishRun("reached-payment", true);
         return;
       }
-      if (tries > 80) { // ~20s 仍未确认到达支付页
-        log("warn", "pay", "等待支付页超时，但确认支付已点击；请人工核对页面状态");
-        showBanner("已点击确认支付 — 请人工核对是否进入支付页", "#fb8c00");
+      if (tries > 80) { // ~20s 仍未到支付页、且全程未检测到失败提示
+        // 已点过「确认支付」(create-sign 已触发、闸已置)，却既没进支付页也没弹失败提示 → 前端无法可靠判定真伪
+        // （收银台可能是跨源 iframe / 文案漏匹配 / 渲染慢）。硬边界优先：宁可漏抢，绝不重复占单。
+        // 故保守判「可能已下单」、停手大声提示人工核对，绝不自动重抢（真正“过码被抢走”由上方 orderFailed
+        // 分支安全重抢；此处是无任何信号的歧义态，重抢可能造成本账号第二笔订单）。
+        log("warn", "pay", "确认支付后 ~20s 未见支付页、也无失败提示 → 可能已下单，保守停手交人工核对(不重抢，防重复占单)");
+        showBanner("⚠ 已点确认支付但未识别到支付页 — 可能已下单，请人工核对订单，勿重复购买/勿盲付", "#fb8c00");
+        startBeepLoop();
+        setTimeout(stopBeepLoop, 4000);
+        sendBg("orderCreated");
         setStatus("ordered");
+        saveRunFlag("ordered");
         finishRun("ordered", true);
         return;
       }
@@ -1170,6 +1254,9 @@
       return;
     }
     log("warn", "retry", "下单未成功（" + reason + "）→ 刷新后回循环重抢");
+    // 清「已下单」闸：retryAfterFail 仅在「明确无订单」(显式失败弹窗/未触发 create-sign 的竞价重抢)被调用，
+    // 此时本账号无占位订单，重抢安全；不清则闸会误拦下一轮正常下单。
+    clearOrderFired();
     ME.clickedBuy = false;
     ME.confirmClicked = false;
     ME.captchaWaiting = false;
@@ -1326,6 +1413,7 @@
   function runLoop(immediate) {
     if (ME.finished) return;
     ME.running = true;
+    ME.startedAt = ME.startedAt || nowSrv(); // 记录循环起点，作为 isPastRetryUntil 在 fireAt 缺失时的回退基准
     setStatus("running");
     saveRunFlag(ME.clickedBuy ? "clicked-buy" : "running");
     log("success", "loop", "进入抢购循环（attempts 上限=" + MAX_ATTEMPTS + "，重试窗口=" + Math.round(((ME.config && ME.config.retryWindowMs) || 3600000) / 1000) + "s，自 fireAt 起算）");
@@ -1499,6 +1587,12 @@
       ensureAudio();
       window.removeEventListener(evt, once);
     }, { once: true, capture: true });
+  });
+
+  // 持续记录「最近一次人工交互时刻」：供 startWaitCaptchaPass 的人工活动抑制使用——
+  // 用户正在过验证码(点滑块/输短信)期间绝不被 limbo 超时误刷掉。轻量、被动，不影响抢购。
+  ["pointerdown", "keydown", "click", "touchstart"].forEach(function (evt) {
+    window.addEventListener(evt, function () { ME._lastUserActAt = Date.now(); }, { capture: true, passive: true });
   });
 
   // 启动

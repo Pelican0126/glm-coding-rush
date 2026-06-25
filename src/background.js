@@ -1049,10 +1049,13 @@ try {
           case "orderCreated": {
             _committed = true;
             stopWatchdog();
-            await setState({ status: "ordered", lastResult: "已创建订单(create-sign)，库存占位" });
             L.success("order", "订单已创建（未支付），库存占位成功");
             var c2 = await getConfig();
             notifyIfEnabled(c2, "下单占位成功", "未支付订单已创建，库存已占住，请尽快人工付款。");
+            // 结算对齐：content 在 ordered 分支已 finishRun(true) 永久停手等人工付款；background 也须结算
+            // （armed=false、_runActive=false、通知另一标签停），否则状态机分歧→当日 armed 卡死无 go、
+            // dailyRearm 形同停摆。占位成功视为本轮终态，当日/次日不再自动重抢（防本账号重复占单）。
+            await finishRun(true, "ordered", "已下单(create-sign)占位，请人工核对金额并付款");
             sendResponse({ ok: true });
             return;
           }
