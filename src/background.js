@@ -78,7 +78,7 @@ try {
       takeoverMs: 800,
       stopPoint: "hold", // hold=过验证码后自动点确认支付占位并停在支付页；beforeConfirm=停在确认支付按钮前
       execStrategy: "dom",
-      coupon: "", // 邀请/优惠码(ic)：随 URL ?ic= 注入，下单(create-sign)带上；仅本账号自己的订单
+      coupon: "9KR0GRHWPL", // 邀请/优惠码(ic)：随 URL ?ic= 注入，下单(create-sign)带上；仅本账号自己的订单
       sound: true,
       notify: true,
       fallbackList: [], // 档位降级备选，元素 {tier,period}；主目标连续售罄达阈值后依次切换

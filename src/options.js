@@ -151,7 +151,6 @@
       if ($("f-site")) $("f-site").value = c.site || DEFAULT_CONFIG.site;
       if ($("f-tier")) $("f-tier").value = c.tier || DEFAULT_CONFIG.tier;
       if ($("f-period")) $("f-period").value = c.period || DEFAULT_CONFIG.period;
-      if ($("f-coupon")) $("f-coupon").value = c.coupon || "";
 
       // 时间与触发
       if ($("f-dropTime"))
@@ -269,9 +268,6 @@
       var period = $("f-period") ? $("f-period").value : "";
       if (PERIODS.indexOf(period) === -1) fail("period", "请选择订阅周期。");
       cfg.period = period;
-
-      // --- coupon（可空，纯文本，去首尾空格）---
-      cfg.coupon = $("f-coupon") ? String($("f-coupon").value || "").trim() : "";
 
       // --- dropTime ---
       var dropRaw = $("f-dropTime") ? $("f-dropTime").value : "";
