@@ -387,10 +387,9 @@
           <div class="v">
             <select id="f-triggerStrategy">
               <option value="hybrid">hybrid（观察 + 周期刷新，推荐）</option>
-              <option value="observe">observe（仅观察，不刷新）</option>
               <option value="reload">reload（周期刷新为主）</option>
             </select>
-            <div class="hint">hybrid 会以 MutationObserver 观察翻转，并在售罄时周期性刷新。</div>
+            <div class="hint">hybrid 会以 MutationObserver 观察翻转，并在售罄时周期性刷新。<br>（本站售罄不会「无刷新」自动翻转，纯观察 observe 对其无效，故已移除。）</div>
             <div class="err">触发策略无效。</div>
           </div>
         </div>
@@ -517,18 +516,12 @@
               <label class="radio-opt">
                 <input type="radio" name="execStrategy" value="dom" />
                 <span>
-                  <span class="ttl">DOM（默认）— 模拟点击</span>
-                  <span class="dsc">通过点击页面按钮触发购买与下单，行为最贴近真人。</span>
-                </span>
-              </label>
-              <label class="radio-opt">
-                <input type="radio" name="execStrategy" value="api" />
-                <span>
-                  <span class="ttl">接口直发（高级）</span>
-                  <span class="dsc">直接调用页面接口，速度更快但风险更高，仅供高级用户在理解风险后使用。</span>
+                  <span class="ttl">DOM 模拟点击（当前唯一实现）</span>
+                  <span class="dsc">通过点击页面按钮触发购买与下单，行为最贴近真人，仍由人工过验证码、停在支付前。</span>
                 </span>
               </label>
             </div>
+            <div class="hint">「接口直发」未实现（直接构造下单请求风险高、且会绕过页面校验），故不提供。</div>
             <div class="err">请选择执行方式。</div>
           </div>
         </div>
@@ -541,17 +534,21 @@
 
     <!-- ============ 4. 双标签 ============ -->
     <section class="section">
-      <h2>双标签</h2>
+      <h2>双标签 <span class="badge">暂未启用</span></h2>
       <div class="section-body">
+        <div class="hint" style="margin-bottom:10px">
+          实测中双标签的「接管」在刷新驱动重试期间会误判主标签卡顿、引发抢标签抖动，故当前统一走更可靠的
+          <b>单标签</b>路径，本节设置暂不生效（保留以备日后完善）。
+        </div>
         <div class="field" data-field="dualTab">
           <label class="k">热备标签页</label>
           <div class="v">
             <div class="toggle-line">
               <label class="switch">
-                <input type="checkbox" id="f-dualTab" />
+                <input type="checkbox" id="f-dualTab" disabled />
                 <span class="track"></span>
               </label>
-              <span class="lbl">开启主 + 备双标签（主抢、备观察）</span>
+              <span class="lbl">开启主 + 备双标签（主抢、备观察）— 暂未启用</span>
             </div>
             <div class="hint">备用标签仅观察；主标签卡顿超过接管阈值后自动接管。</div>
           </div>
@@ -561,7 +558,7 @@
           <label class="k" for="f-takeoverMs">接管阈值 takeoverMs</label>
           <div class="v">
             <div class="with-unit">
-              <input type="number" id="f-takeoverMs" class="tiny" min="200" max="5000" step="50" />
+              <input type="number" id="f-takeoverMs" class="tiny" min="200" max="5000" step="50" disabled />
               <span class="unit">毫秒</span>
             </div>
             <div class="hint">主标签停滞超过此时长，备用标签升级为 leader 接管（默认 800）。</div>
@@ -572,7 +569,7 @@
         <div class="field" data-field="maxTabs">
           <label class="k" for="f-maxTabs">最大标签数</label>
           <div class="v">
-            <input type="number" id="f-maxTabs" class="tiny" min="1" max="2" step="1" />
+            <input type="number" id="f-maxTabs" class="tiny" min="1" max="2" step="1" disabled />
             <div class="hint">防滥用上限：最多 2 个标签页。</div>
             <div class="err">应为 1 或 2。</div>
           </div>
@@ -629,8 +626,20 @@
           <label class="k" for="f-fallbackList">候补目标列表</label>
           <div class="v">
             <textarea id="f-fallbackList" placeholder='JSON 数组，例如：&#10;[ { "tier": "pro", "period": "quarter" }, { "tier": "lite", "period": "month" } ]'></textarea>
-            <div class="hint">主目标售罄时按顺序尝试的候补 {tier, period} 列表。JSON 数组，可留空。</div>
+            <div class="hint">主目标连续售罄达「候补切换轮数」后，按此顺序依次切到下一个 {tier, period}。JSON 数组，可留空。</div>
             <div class="err">必须是合法的 JSON 数组，每项含 tier 与 period。</div>
+          </div>
+        </div>
+
+        <div class="field" data-field="fallbackAfterRounds">
+          <label class="k" for="f-fallbackAfterRounds">候补切换轮数</label>
+          <div class="v">
+            <div class="with-unit">
+              <input type="number" id="f-fallbackAfterRounds" class="tiny" min="1" max="200" step="1" />
+              <span class="unit">轮</span>
+            </div>
+            <div class="hint">当前档位连续售罄达此「刷新轮数」后切到下一候补（默认 10）。候补列表为空时此项无效。</div>
+            <div class="err">应为 1 ~ 200 的整数。</div>
           </div>
         </div>
       </div>

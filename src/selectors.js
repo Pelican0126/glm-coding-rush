@@ -172,45 +172,44 @@
         document.querySelectorAll(BUY_BTN)
       );
       if (!btns.length) return null;
+      var amt = (entry.payAmount != null) ? String(entry.payAmount) : "";
 
-      // 0) 最稳：校正视图后（个人套餐 + 目标周期），页面固定展示 3 张卡，
-      //    顺序为 Lite / Pro / Max，可见的 3 个 .buy-btn 与之一一对应。
-      //    直接按 tier 位置映射 —— 与桥接快照新鲜度无关，最可靠，避免买错档位。
-      var TIER_INDEX = { lite: 0, pro: 1, max: 2 };
-      if (btns.length === 3 && entry.type && TIER_INDEX[entry.type] != null) {
-        return btns[TIER_INDEX[entry.type]];
-      }
-
-      // 1) 通过卡片容器文本（productName / 金额）匹配
-      var name = entry.productName ? String(entry.productName) : "";
-      var amt = entry.payAmount != null ? String(entry.payAmount) : "";
-      for (var i = 0; i < btns.length; i++) {
-        var card = findCardContainer(btns[i]);
-        var ctext = textOf(card);
-        if (name && ctext.indexOf(name) !== -1) return btns[i];
-        if (amt && ctext.indexOf("¥" + amt) !== -1) return btns[i];
-        if (amt && ctext.indexOf(amt) !== -1 && name && ctext.indexOf(entry.type || "") !== -1) {
-          return btns[i];
-        }
-      }
-
-      // 2) 退化：按索引匹配（allCardDataList 与可见卡片顺序大致一致时）
-      var store = getVueStore();
-      if (store && Array.isArray(store.cardDataArr)) {
-        // cardDataArr 是当前展示周期的卡片，尝试在其中定位 entry
-        var arr = store.cardDataArr;
-        for (var j = 0; j < arr.length; j++) {
-          if (
-            arr[j] &&
-            arr[j].type === entry.type &&
-            arr[j].unit === entry.unit
-          ) {
-            if (btns[j]) return btns[j];
+      // 向上取「整张卡」文本：.package-card-btn-box 里只有按钮、没有价格/档位名，需多爬几层到含价格的祖先。
+      function cardTextOf(btn) {
+        var el = btn, hops = 0, acc = "";
+        while (el && el.parentElement && hops < 12) {
+          el = el.parentElement; hops++;
+          var t = textOf(el);
+          if (t && (t.indexOf("¥") !== -1 || t.indexOf("￥") !== -1 || /\/月|\/季|\/年/.test(t))) {
+            acc = t;
+            if (t.length > 15) break;
           }
         }
+        return acc;
       }
 
-      // 3) 最后兜底：若仅有一个按钮则返回它
+      // 1) 主：按 payAmount 精确匹配（当前周期 3 张卡里金额唯一，如 Pro 月=149）——最可靠、抗改版/换序。
+      if (amt) {
+        for (var i = 0; i < btns.length; i++) {
+          var ct = cardTextOf(btns[i]);
+          if (ct && (ct.indexOf("¥" + amt) !== -1 || ct.indexOf("￥" + amt) !== -1)) return btns[i];
+        }
+      }
+
+      // 2) cardDataArr 索引（当前周期卡片顺序，按 type+unit 对位）
+      var store = getVueStore();
+      if (store && Array.isArray(store.cardDataArr)) {
+        var arr = store.cardDataArr;
+        for (var j = 0; j < arr.length; j++) {
+          if (arr[j] && arr[j].type === entry.type && arr[j].unit === entry.unit && btns[j]) return btns[j];
+        }
+      }
+
+      // 3) 末位兜底：个人套餐固定 Lite/Pro/Max 顺序（仅当上面都未命中；不再因 length===3 短路而跳过文本/索引匹配）。
+      var TIER_INDEX = { lite: 0, pro: 1, max: 2 };
+      if (entry.type && TIER_INDEX[entry.type] != null && btns[TIER_INDEX[entry.type]]) {
+        return btns[TIER_INDEX[entry.type]];
+      }
       if (btns.length === 1) return btns[0];
       return null;
     } catch (e) {
@@ -248,9 +247,10 @@
     try {
       var dataBuyable = false;
       if (entry) {
-        if (entry.soldOut === false) dataBuyable = true;
-        if (entry.canPurchase) dataBuyable = true;
-        if (entry.disabled === false) dataBuyable = true;
+        // AND 语义：明确 canPurchase===true，或「未售罄且未禁用」。
+        // 旧 OR 逻辑里 disabled===false 单独成立即判可买，对 {soldOut:true,disabled:false} 会误判。
+        if (entry.canPurchase === true) dataBuyable = true;
+        else if (entry.soldOut === false && entry.disabled === false) dataBuyable = true;
       }
       var domBuyable = false;
       if (btn) {

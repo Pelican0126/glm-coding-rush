@@ -137,13 +137,20 @@
    * sync(url, samples=5) —— 优先用接口毫秒时间戳，回退 HTTP Date 头；取中位数 offset（毫秒）。
    * 失败的单次会被跳过；全部失败返回 0（即视为不偏移，保守处理）。优先采用 rtt 较小的样本。
    */
+  // 默认关闭接口毫秒对时：已实测 bigmodel 候选接口均不带服务器 ms 时间戳（findEpochMs 找不到），
+  // 开启只会在每次对时前多打 2 个带 cookie 的探测请求、徒增噪声/风控面，对精度无任何提升。
+  // 保留实现并可在 future 通过 enableApiSync(true) 打开（若某天接口开始返回 ms 时间戳）。
+  var _apiEnabled = false;
+
   async function sync(url, samples) {
-    // 优先：接口响应体里的服务器毫秒时间戳（精度 ~RTT/2）
-    try {
-      var apiOff = await syncApi(null, samples);
-      if (apiOff != null && isFinite(apiOff)) { _lastSource = "api-ms"; return apiOff; }
-    } catch (e) {}
-    // 回退：HTTP Date 头（仅秒级，±500ms，由 advanceMs+重试补偿）
+    // 优先：接口响应体里的服务器毫秒时间戳（精度 ~RTT/2）—— 默认关闭，见 _apiEnabled 注释
+    if (_apiEnabled) {
+      try {
+        var apiOff = await syncApi(null, samples);
+        if (apiOff != null && isFinite(apiOff)) { _lastSource = "api-ms"; return apiOff; }
+      } catch (e) {}
+    }
+    // 回退/默认：HTTP Date 头（仅秒级，±500ms，由 advanceMs+重试补偿）
     _lastSource = "date-header";
     var n = samples || 5;
     var results = [];
@@ -181,6 +188,8 @@
     syncApi: syncApi,
     sync: sync,
     now: now,
+    enableApiSync: function (b) { _apiEnabled = !!b; }, // 默认 false：接口无 ms 时间戳，见 _apiEnabled 注释
+    apiSyncEnabled: function () { return _apiEnabled; },
     lastSource: function () { return _lastSource; },
     _median: median
   };

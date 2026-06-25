@@ -59,6 +59,9 @@
     armed: false,
     dryRun: false,
     attempts: 0,                   // 已尝试次数
+    fallbackIndex: 0,              // 档位降级游标（0=主目标，>0=fallbackList 第 N 个）
+    soldOutRounds: 0,              // 当前档位连续「售罄重载」轮数（达阈值则降级）
+    noCardRounds: 0,              // 连续「无卡片」重载轮数（疑似软限流，达阈值则退避刷新间隔）
     lastReloadAt: 0,               // 上次刷新/重型恢复时间
     lastClickAt: 0,                // 上次点击 buy 时间（去抖）
     clickedBuy: false,            // 本轮是否已点过 buy（进入验证码阶段）
@@ -146,6 +149,9 @@
         fireAt: ME.fireAt,
         role: ME.role,
         stopPoint: ME.config ? ME.config.stopPoint : "hold",
+        fallbackIndex: ME.fallbackIndex || 0,
+        soldOutRounds: ME.soldOutRounds || 0,
+        noCardRounds: ME.noCardRounds || 0,
         ts: Date.now()
       };
       var o = {}; o[RUN_FLAG_KEY] = flag;
@@ -168,16 +174,27 @@
   }
   function nowSrv() { return T.now(ME.offsetMs); }
 
+  // 邀请/优惠码(ic)：用户在设置里填的 invitationCode。空则不启用（向后兼容）。
+  // 仅作用于本账号自己的订单：站点读取 URL 的 ic 写入 invitationCode，随下单(create-sign)提交。
+  function couponIc() {
+    try { return String((ME.config && (ME.config.coupon || ME.config.invitationCode)) || "").trim(); }
+    catch (e) { return ""; }
+  }
+
   // 生成"干净"的刷新 URL：清掉历史累积的 _h/_r/_s/_ts 缓存破坏参数，只留一个最新的，避免 URL 无限膨胀。
+  // 保留页面已带的 ic；若设置了 invitationCode 则注入/覆盖，使每次重载后下单仍带优惠码。
   function reloadFreshUrl() {
     try {
       var u = new URL(location.href);
       ["_h", "_r", "_s", "_ts"].forEach(function (k) { u.searchParams.delete(k); });
+      var ic = couponIc();
+      if (ic) u.searchParams.set("ic", ic);
       u.searchParams.set("_h", String(Date.now()));
       return u.toString();
     } catch (e) {
       var base = location.href.split("#")[0].split("?")[0];
-      return base + "?_h=" + Date.now();
+      var ic2 = couponIc();
+      return base + "?" + (ic2 ? "ic=" + encodeURIComponent(ic2) + "&" : "") + "_h=" + Date.now();
     }
   }
 
@@ -365,8 +382,12 @@
         // 不在此直接点击；标记“有变化”，让 tryBuy 的下一拍尽快执行。
         scheduleImmediateCheck();
       });
-      ME.observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
-      log("info", "observer", "已挂载 MutationObserver");
+      // 缩小监听面：childList+subtree 捕获重载后卡片重新挂载（新节点插入）；
+      // attributeFilter:["disabled"] 捕获售罄→可购的就地翻转（售罄按钮带 disabled）。
+      // 去掉 characterData 与无过滤 attributes —— 它们在 Vue/ElementUI 上每帧高频触发，
+      // 会把 scheduleImmediateCheck→tryBuy 拖成近似每帧忙轮询。
+      ME.observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled"] });
+      log("info", "observer", "已挂载 MutationObserver（childList+subtree+disabled）");
     } catch (e) {
       log("warn", "observer", "挂载失败: " + (e && e.message));
     }
@@ -755,6 +776,44 @@
     return false;
   }
 
+  // 页面是否已渲染出卡片（store 有 allCardDataList，或页面有 .buy-btn）。
+  // 用于区分「售罄」(有卡片但不可购) 与「无卡片」(疑似高频刷新软限流了卡片数据接口)。
+  function cardsPresent() {
+    try {
+      var store = S.getVueStore ? S.getVueStore() : null;
+      if (store && Array.isArray(store.allCardDataList) && store.allCardDataList.length) return true;
+    } catch (e) {}
+    try {
+      var btns = document.querySelectorAll(S.BUY_BTN || "button.buy-btn");
+      if (btns && btns.length > 0) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  // 档位降级（fallbackList）：当前档位连续 K 轮(刷新)售罄 → 切到下一个备选 {tier,period}，提升抢中率。
+  // 仅切档、不增购：一旦进入下单(clickedBuy)即不再切换；始终单账号单笔、停在支付前。
+  // 在「真正执行一次刷新」时调用（一次刷新 = 一轮）；切档后由刷新→resume 用新 target 重选周期/产品。
+  function maybeFallbackSwitch() {
+    try {
+      if (ME.clickedBuy || ME.finished) return;
+      var fbList = (ME.config && Array.isArray(ME.config.fallbackList)) ? ME.config.fallbackList : [];
+      if (!fbList.length) return;
+      ME.soldOutRounds = (ME.soldOutRounds || 0) + 1;
+      var K = (ME.config && ME.config.fallbackAfterRounds) || 10;
+      if (ME.soldOutRounds < K) return;
+      if ((ME.fallbackIndex || 0) >= fbList.length) return; // 备选已用尽，维持最后一档继续重试
+      ME.fallbackIndex = (ME.fallbackIndex || 0) + 1;
+      ME.soldOutRounds = 0;
+      var nf = fbList[ME.fallbackIndex - 1] || {};
+      if (nf && nf.tier && nf.period) {
+        ME.target = { tier: nf.tier, period: nf.period };
+        log("warn", "fallback", "本档连续售罄 " + K + " 轮 → 降级到备选 " + nf.tier + "/" + nf.period +
+          "（第 " + ME.fallbackIndex + "/" + fbList.length + " 个备选）");
+        patchState({ target: { tier: nf.tier, period: nf.period, productId: null } });
+      }
+    } catch (e) {}
+  }
+
   // ---- 售罄/未翻转：刷新驱动重试（点击抢→售罄→刷新→再抢） ----
   function onSoldOut(entry, btn) {
     sendBg("soldOut");
@@ -771,10 +830,33 @@
       var burst = (ME.config && ME.config.burstWindowMs) || 180000;
       var slow = (ME.config && ME.config.slowReloadIntervalMs) || 4000;
       if (ME.fireAt && (nowSrv() - ME.fireAt) > burst) cycle = Math.max(cycle, slow);
+
+      // 限流降级退避：连续 N 轮重载后页面仍「无卡片」(疑似高频刷新把卡片数据接口刷进了软限流)，
+      // 大幅拉长刷新间隔给接口恢复时间，避免越刷越糟、把自己刷进更深的限流。卡片恢复即退出退避。
+      var present = cardsPresent();
+      if (present && ME.noCardRounds) {
+        log("info", "rate", "卡片已恢复，退出限流退避");
+        ME.noCardRounds = 0;
+      }
+      var N = (ME.config && ME.config.noCardBackoffRounds) || 3;
+      var backedOff = (!present && (ME.noCardRounds || 0) >= N);
+      if (backedOff) {
+        var backoff = (ME.config && ME.config.backoffReloadIntervalMs) || 12000;
+        cycle = Math.max(cycle, backoff);
+      }
+
       var since = Date.now() - ME.lastReloadAt;
       if (since > Math.max(RELOAD_FLOOR_MS, cycle)) {
         ME.lastReloadAt = Date.now();
-        log("info", "soldout", "售罄 → 刷新页面再抢（刷新驱动，周期≈" + cycle + "ms）");
+        if (!present) {
+          ME.noCardRounds = (ME.noCardRounds || 0) + 1;
+          if (backedOff) {
+            log("warn", "rate", "连续 " + ME.noCardRounds + " 轮无卡片(疑似软限流)，刷新间隔退避≈" + cycle + "ms 等接口恢复");
+          }
+        } else {
+          maybeFallbackSwitch(); // 仅在「有卡片但售罄」时计入档位降级；无卡片不算售罄轮
+        }
+        log("info", "soldout", (present ? "售罄" : "无卡片") + " → 刷新页面再抢（周期≈" + cycle + "ms）");
         saveRunFlag("running");
         var target = reloadFreshUrl();
         setTimeout(function () {
@@ -1070,6 +1152,7 @@
   function stopRun(status) {
     ME.running = false;
     ME.captchaWaiting = false;
+    ME._goActive = false; // 释放 go 幂等闸：停止后允许同一 fireAt 重新开抢（如再次布防/手动开抢）
     cleanupTimers();
     stopBeepLoop();
     setStatus(status || "stopped");
@@ -1111,6 +1194,13 @@
   // ---------------------------------------------------------------------------
   async function startGoFlow(opts) {
     // opts: { config, target, fireAt, role, resume, resumePhase }
+    // F2 幂等：同一 fireAt 的 go 若已激活（非断点恢复）→ 忽略重复，避免二次挂 observer / 打断倒计时与循环。
+    var _incomingFireAt = opts.fireAt || ME.fireAt || 0;
+    if (!opts.resume && ME._goActive && ME._activeFireAt === _incomingFireAt) {
+      log("info", "go", "忽略重复 go（同 fireAt=" + _incomingFireAt + " 已激活）");
+      return;
+    }
+    if (!opts.resume) { ME._goActive = true; ME._activeFireAt = _incomingFireAt; }
     ME.config = opts.config || ME.config || {};
     ME.target = opts.target || ME.target || { tier: ME.config.tier, period: ME.config.period };
     if (ME.target && ME.target.payAmount != null && ME.target.payAmountHint == null) {
@@ -1120,12 +1210,16 @@
     ME.role = opts.role || (opts.roleObj && opts.roleObj.role) || ME.role || "primary";
     if (ME.role === "backup") ME.isLeader = false; else ME.isLeader = true;
 
-    // 读取最新 state（dryRun / offsetMs / role 信息）
+    // 读取最新 state（dryRun / offsetMs / role / 是否已由 background 对时 / 累计尝试次数）
+    var bgSynced = false;
     try {
       var st = await getLocal(["state"]);
       var state = st.state || {};
       ME.dryRun = !!state.dryRun;
       if (typeof state.offsetMs === "number") ME.offsetMs = state.offsetMs;
+      bgSynced = !!state.goDispatched; // background 下发 go 前必做一次 resync，此标记即其证据
+      // F7：断点恢复(刷新续跑)时还原累计尝试次数，使 popup 计数与次数上限跨重载连续
+      if (opts.resume && typeof state.attempts === "number") ME.attempts = state.attempts;
       if (state.role) {
         // 由 background 指派的 leader
         if (state.role.leaderTabId != null) {
@@ -1137,6 +1231,36 @@
     log("info", "go", "收到开抢指令：tier=" + ME.target.tier + " period=" + ME.target.period +
       " role=" + ME.role + " stopPoint=" + (ME.config.stopPoint || "hold") +
       " dryRun=" + ME.dryRun + (opts.resume ? " (恢复:" + opts.resumePhase + ")" : ""));
+
+    // F7：尝试次数上限对齐重试时间窗——让「时间窗」(isPastRetryUntil) 成为权威停止条件，
+    //     次数上限仅作失控兜底（窗口内以轮询地板间隔可达的最大次数 + 余量，正常绝不先于时间窗触发）。
+    var _win = (ME.config && ME.config.retryWindowMs) || 3600000;
+    MAX_ATTEMPTS = Math.max(4000, Math.ceil(_win / POLL_FLOOR_MS) + 2000);
+
+    // 优惠/邀请码(ic)：若设置了 invitationCode 且当前页未带或不一致，先把 ic 注入 URL 并重载一次，
+    // 让站点在下单(create-sign)时带上该 ic（仅本账号自己的订单）。在 go(≈T-90s)时做，时间充裕；
+    // 保存 runFlag 以便重载后经 init→resume 重新进入本流程（届时 ic 已匹配，不再重载，无循环）。
+    if (!opts.resume) {
+      var _ic = couponIc();
+      var _curIc = "";
+      try { _curIc = new URL(location.href).searchParams.get("ic") || ""; } catch (e) {}
+      if (_ic && _curIc !== _ic) {
+        // 一次性闸：防止站点在加载时剥离 ic 导致每次都判定「不一致」而无限重载。
+        var _icTried = false;
+        try { _icTried = window.sessionStorage.getItem("glm_ic_injected") === _ic; } catch (e) {}
+        if (!_icTried) {
+          try { window.sessionStorage.setItem("glm_ic_injected", _ic); } catch (e) {}
+          log("info", "coupon", "注入邀请/优惠码 ic=" + _ic + "（重载使其在下单时生效）");
+          saveRunFlag("countdown");
+          var _icUrl = reloadFreshUrl(); // 已含 ic
+          setTimeout(function () {
+            try { location.replace(_icUrl); } catch (e) { try { location.reload(); } catch (e2) {} }
+          }, 0);
+          return;
+        }
+        log("warn", "coupon", "页面未保留 ic（站点可能在加载时剥离），跳过注入、继续抢购");
+      }
+    }
 
     // 1) 预热
     preheatConnections();
@@ -1151,9 +1275,14 @@
     patchState({ target: { tier: ME.target.tier, period: ME.target.period, productId: ME.target.productId || null } });
     attachObserver();
 
-    // 3) 时间同步：仅「首次开抢」做一次。断点恢复(刷新续跑)沿用 storage 已同步的 offset，
-    //    避免每次刷新都白跑 5 连发对时（拖慢"刷新→再查"节奏、平添请求）。
-    if (!opts.resume) {
+    // 3) 时间同步（F6）：background 在 arm/preheat 已对时并写入 state.offsetMs，且 go 必在一次
+    //    resync 之后才下发（goDispatched 即证据）。检测到 background 已对时、或断点恢复(刷新续跑)时，
+    //    content 直接复用该 offset，不再自行对时——省去每轮 5 连发请求（更快、更礼貌、不与 SW 重复）。
+    //    仅当两者皆无（异常/边角路径）时，做一次对时兜底。
+    if (opts.resume || bgSynced) {
+      log("info", "time", (opts.resume ? "断点恢复" : "复用 background 对时") +
+        "，沿用 offset≈" + Math.round(ME.offsetMs) + "ms（不重复对时）");
+    } else {
       try {
         var off = await T.sync(SITE_URL, 5);
         if (typeof off === "number" && isFinite(off)) {
@@ -1164,8 +1293,6 @@
       } catch (e) {
         log("warn", "time", "content 侧时间同步失败，沿用 offset=" + Math.round(ME.offsetMs) + "ms");
       }
-    } else {
-      log("info", "time", "断点恢复，沿用已同步 offset≈" + Math.round(ME.offsetMs) + "ms（不重复对时）");
     }
 
     // 断点恢复：若已处于点击后阶段，直接进入对应阶段，不再等待 fireAt
@@ -1310,12 +1437,28 @@
     // 注册到 background
     sendBg("contentReady", { role: ME.role, url: location.href });
 
-    // 断点恢复：若存在运行标志且属于本站、未过期（<10 分钟），且抢购正在进行
+    // 断点恢复（F4）：续跑窗口按「抢购时间窗」界定，而非固定 10 分钟。
+    // 竞速阶段(countdown/preheat/running)：只要服务器现在仍 < fireAt+retryWindowMs(默认1h,可配)就续跑，
+    //   与 isPastRetryUntil 对齐——否则长窗口里一次较慢的重载/系统休眠就会让续跑失效、中途弃抢。
+    // 点击后阶段(clicked-buy/captcha-wait/ordered，人工节奏)：用较宽松的新鲜度上限(30min)兜底。
     try {
-      if (flag && flag.ts && (Date.now() - flag.ts) < 10 * 60 * 1000) {
+      if (flag && flag.ts) {
         var resumablePhases = ["countdown", "preheat", "running", "clicked-buy", "captcha-wait", "ordered"];
-        if (resumablePhases.indexOf(flag.phase) !== -1) {
+        var racePhase = (flag.phase === "countdown" || flag.phase === "preheat" || flag.phase === "running");
+        var srvNow = Date.now() + (ME.offsetMs || 0);
+        var win = (config.retryWindowMs || 3600000);
+        var fresh;
+        if (racePhase && flag.fireAt) {
+          fresh = srvNow < (flag.fireAt + win + 60000);
+        } else {
+          fresh = (Date.now() - flag.ts) < 30 * 60 * 1000;
+        }
+        if (fresh && resumablePhases.indexOf(flag.phase) !== -1) {
           log("warn", "resume", "检测到中断的抢购进度(phase=" + flag.phase + ")，恢复…");
+          // 还原档位降级游标（flag.target 已是当前/已降级到的目标）与限流退避计数
+          ME.fallbackIndex = flag.fallbackIndex || 0;
+          ME.soldOutRounds = flag.soldOutRounds || 0;
+          ME.noCardRounds = flag.noCardRounds || 0;
           // countdown/preheat：仍按 fireAt 等待；其余阶段：直接恢复
           var resumePast = (flag.phase === "running" || flag.phase === "clicked-buy" ||
                             flag.phase === "captcha-wait" || flag.phase === "ordered");

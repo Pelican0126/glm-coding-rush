@@ -51,8 +51,7 @@ try {
   var PREHEAT_ALARM = "glm-preheat"; // 预热（开标签+再同步）alarm
   var WATCHDOG_ALARM = "glm-watchdog"; // 接管看门狗 alarm
   var ALARM_LEAD_MS = 60 * 1000; // alarm 约提前 60s 唤醒（主调度兜底）
-  var PREHEAT_LEAD_MS = 90 * 1000; // 约 T-90s 打开/聚焦标签并再同步
-  var GO_LEAD_MS = 15 * 1000; // 约 T-15s 向 leader 发 go
+  var PREHEAT_LEAD_MS = 90 * 1000; // 约 T-90s 打开/聚焦标签并再同步，随即下发 go（content 在页面内自旋到 T0）
   // 看门狗 alarm 兜底周期：Chrome 对已安装扩展把 <1min 的周期钳到 1min，
   // 故这里直接用 1min（粗粒度）。真正的快速接管由 setInterval(200ms) 负责，
   // 且 leader 一旦提交(_committed)即永久禁用接管，alarm 仅作 SW 复活时的兜底。
@@ -78,10 +77,13 @@ try {
       takeoverMs: 800,
       stopPoint: "hold", // hold=过验证码后自动点确认支付占位并停在支付页；beforeConfirm=停在确认支付按钮前
       execStrategy: "dom",
-      coupon: "",
+      coupon: "", // 邀请/优惠码(ic)：随 URL ?ic= 注入，下单(create-sign)带上；仅本账号自己的订单
       sound: true,
       notify: true,
-      fallbackList: [],
+      fallbackList: [], // 档位降级备选，元素 {tier,period}；主目标连续售罄达阈值后依次切换
+      fallbackAfterRounds: 10, // 当前档位连续售罄多少轮(刷新)后降级到下一备选
+      noCardBackoffRounds: 3, // 连续多少轮「无卡片」后判定软限流并退避刷新间隔
+      backoffReloadIntervalMs: 12000, // 软限流退避时的刷新间隔
       selectorOverrides: {},
       maxTabs: 2
     };
@@ -96,6 +98,8 @@ try {
       target: { tier: "pro", period: "month", productId: "" },
       offsetMs: 0,
       nextFireAt: 0,
+      goDispatched: false,
+      goDispatchedFireAt: 0,
       lastResult: "",
       role: { primaryTabId: 0, backupTabId: 0, leaderTabId: 0 },
       updatedAt: Date.now()
@@ -611,6 +615,8 @@ try {
     if (_goSent) return;
     var config = await getConfig();
     var state = await getState();
+    // 跨 SW 重启幂等：本轮(同 fireAt)已下发过 go 则不重发——防 SW 挂起重启后 _goSent 归零导致二次 go 打断倒计时。
+    if (state.goDispatched && state.goDispatchedFireAt === state.nextFireAt) { _goSent = true; return; }
     var target = await buildTarget(config);
 
     var role = state.role || {};
@@ -634,7 +640,7 @@ try {
     _committed = false;
     _lastLeaderSignalAt = Date.now();
 
-    await setState({ status: "preheat", role: { leaderTabId: primaryTabId } });
+    await setState({ status: "preheat", role: { leaderTabId: primaryTabId }, goDispatched: true, goDispatchedFireAt: fireAt });
 
     // leader：正常下单角色
     var goMsg = { type: "go", config: config, target: target, fireAt: fireAt, role: "leader" };
@@ -726,6 +732,8 @@ try {
       target: target,
       offsetMs: offset,
       nextFireAt: fireServer,
+      goDispatched: false,
+      goDispatchedFireAt: 0,
       lastResult: ""
     });
 
@@ -755,7 +763,7 @@ try {
         if (state.role.backupTabId) sendToTab(state.role.backupTabId, { type: "stop" });
       }
     } catch (e) {}
-    return await setState({ status: "idle", armed: false, nextFireAt: 0 });
+    return await setState({ status: "idle", armed: false, nextFireAt: 0, goDispatched: false, goDispatchedFireAt: 0 });
   }
 
   // 手动开抢：立即预热并尽快发 go（fireAt 设为「现在+小提前量」）
@@ -770,6 +778,8 @@ try {
       armed: true,
       offsetMs: offset,
       nextFireAt: fireServer,
+      goDispatched: false,
+      goDispatchedFireAt: 0,
       role: { primaryTabId: tabs.primaryTabId, backupTabId: tabs.backupTabId, leaderTabId: tabs.primaryTabId }
     });
     _goSent = false;
@@ -800,23 +810,10 @@ try {
     _leaderTabId = tabs.primaryTabId;
     _backupTabId = tabs.backupTabId;
 
-    // 安排在约 T-15s 发 go：用 setTimeout（预热后 SW 活跃，距 T0 不远），同时由主 alarm 兜底
-    var localFire = fireServer - offset;
-    var goDelay = localFire - GO_LEAD_MS - Date.now();
-    if (goDelay <= 0) {
-      // 已过 T-15s：立即发
-      await sendGo();
-    } else {
-      // 上限保护：若距离过远（异常），不长睡，交给 alarm 兜底
-      if (goDelay < 5 * 60 * 1000) {
-        setTimeout(function () {
-          sendGo();
-        }, goDelay);
-        L.info("preheat", "将于 " + Math.round(goDelay / 1000) + "s 后下发 go");
-      } else {
-        L.info("preheat", "距开售较远(" + Math.round(goDelay / 1000) + "s)，等待主 alarm 兜底");
-      }
-    }
+    // 立即下发 go：让 content 在「页面内」自旋到 fireAt（页面计时不受 SW 30s 挂起影响）。
+    // 不再用跨挂起会丢失的长 setTimeout，也不依赖 alarm 的亚分钟精度——SW 此后即使被挂起也无妨。
+    L.info("preheat", "预热完成，立即下发 go（由内容脚本在页面内自旋到 T0）");
+    await sendGo();
   }
 
   // ===== alarm 处理 =====
@@ -827,23 +824,13 @@ try {
         if (alarm.name === PREHEAT_ALARM) {
           await doPreheat();
         } else if (alarm.name === ALARM_NAME) {
-          // 主调度兜底：约 T-60s。确保标签+go 已安排。
-          var config = await getConfig();
+          // 主调度兜底（约 T-60s）：极端情况(PREHEAT_ALARM 未触发)时补做预热+发 go。
+          // doPreheat 内部会 sendGo；sendGo 经 state.goDispatched 自带跨 SW 重启幂等，重复调用安全。
+          // go 之后由内容脚本在「页面内」自旋到 T0，不再用此处会随 SW 挂起丢失的 setTimeout。
           var state = await getState();
           if (!state.armed) return;
-          // 若预热未跑（SW 被挂起跳过），这里补做
-          if (!_runActive && !_goSent) {
+          if (!state.goDispatched) {
             await doPreheat();
-          }
-          // 计算距 T0；若已很近则直接发 go
-          var localFire = (state.nextFireAt || 0) - (state.offsetMs || 0);
-          var toFire = localFire - Date.now();
-          if (toFire <= GO_LEAD_MS + 2000 && !_goSent) {
-            await sendGo();
-          } else if (toFire > 0 && toFire < 5 * 60 * 1000 && !_goSent) {
-            setTimeout(function () {
-              sendGo();
-            }, Math.max(0, toFire - GO_LEAD_MS));
           }
         } else if (alarm.name === WATCHDOG_ALARM) {
           // 看门狗 alarm 兜底（SW 复活时）：检查 leader 静默
@@ -886,7 +873,9 @@ try {
     await setState({
       status: "countdown",
       armed: true,
-      nextFireAt: fireServer
+      nextFireAt: fireServer,
+      goDispatched: false,
+      goDispatchedFireAt: 0
     });
     scheduleAlarms(fireServer, offset);
   }

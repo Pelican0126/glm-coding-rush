@@ -42,6 +42,7 @@
     sound: true,
     notify: true,
     fallbackList: [],
+    fallbackAfterRounds: 10,
     selectorOverrides: {},
     maxTabs: 2
   };
@@ -218,6 +219,9 @@
         $("f-fallbackList").value =
           fl && fl.length ? JSON.stringify(fl, null, 2) : "";
       }
+      if ($("f-fallbackAfterRounds"))
+        $("f-fallbackAfterRounds").value =
+          c.fallbackAfterRounds != null ? c.fallbackAfterRounds : DEFAULT_CONFIG.fallbackAfterRounds;
     } catch (e) {
       log.error("options", "回填表单失败: " + (e && e.message));
     }
@@ -462,6 +466,16 @@
             });
           }
         }
+      }
+
+      // --- fallbackAfterRounds（候补切换轮数，1~200 整数）---
+      var farRaw = $("f-fallbackAfterRounds") ? $("f-fallbackAfterRounds").value : "";
+      var far = parseInt(farRaw, 10);
+      if (farRaw === "" || isNaN(far) || far < 1 || far > 200) {
+        fail("fallbackAfterRounds", "应为 1 ~ 200 的整数。");
+        cfg.fallbackAfterRounds = DEFAULT_CONFIG.fallbackAfterRounds;
+      } else {
+        cfg.fallbackAfterRounds = clampInt(far, 1, 200);
       }
     } catch (e) {
       log.error("options", "校验异常: " + (e && e.message));
