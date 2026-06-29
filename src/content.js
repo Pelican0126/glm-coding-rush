@@ -38,6 +38,10 @@
   var SITE = "bigmodel";
   var SITE_URL = "https://open.bigmodel.cn/glm-coding";
 
+  // 本次内容脚本(=本次页面加载)的起始时刻。内容脚本每次页面加载都会重新执行，故此值即「本页加载时刻」，
+  // 用于给 SPA 挂载渲染卡片留「宽限期」：刚加载就判无卡片不应立刻重载（Vue 还没挂载完）。
+  var SCRIPT_START = Date.now();
+
   // ====== 反滥用常量 ======
   var RELOAD_FLOOR_MS = 250;       // 刷新/重型请求地板间隔
   var POLL_FLOOR_MS = 250;         // 轮询地板间隔
@@ -56,6 +60,8 @@
     offsetMs: 0,                   // 服务器时间偏移
     fireAt: 0,                     // 服务器纪元毫秒触发时刻
     running: false,                // tryBuy 循环是否在跑
+    buyPhase: false,               // 是否已进入「买入窗口」(到点 fireAt 后)。倒计时期间为 false，
+                                   // 用于禁止 MutationObserver/tryBuy 在开抢前就刷新页面（防开抢前自我软限流）。
     armed: false,
     dryRun: false,
     attempts: 0,                   // 已尝试次数
@@ -407,8 +413,10 @@
       var root = document.querySelector("#app") || document.body;
       if (!root) return;
       ME.observer = new MutationObserver(function () {
-        // 仅在运行中、且尚未进入点击后阶段时，借助变化“提前”触发一次检查。
-        if (!ME.running) return;
+        // 仅在「买入窗口」(到点后)、运行中、且尚未进入点击后阶段时，借助变化“提前”触发一次检查。
+        // buyPhase 守卫关键：倒计时期间页面渲染会触发大量 mutation，若此时就 tryBuy→onSoldOut→刷新，
+        // 会在开抢前把卡片接口刷进软限流，到点反而出不来购买按钮（实测 bug）。
+        if (!ME.buyPhase || !ME.running) return;
         if (ME.clickedBuy || ME.finished) return;
         // 不在此直接点击；标记“有变化”，让 tryBuy 的下一拍尽快执行。
         scheduleImmediateCheck();
@@ -432,7 +440,7 @@
     if (ME.retryTimer) { clearTimeout(ME.retryTimer); ME.retryTimer = null; }
     requestAnimationFrame(function () {
       _immediatePending = false;
-      if (ME.running && !ME.clickedBuy && !ME.finished) tryBuy();
+      if (ME.buyPhase && ME.running && !ME.clickedBuy && !ME.finished) tryBuy();
     });
   }
 
@@ -655,7 +663,8 @@
    *   - 售罄 -> 分级重试
    */
   function tryBuy() {
-    if (!ME.running || ME.finished) return;
+    // buyPhase 守卫：到点(fireAt)前绝不进入买入/刷新逻辑——倒计时只在 spinUntilFire 里等待。
+    if (!ME.running || !ME.buyPhase || ME.finished) return;
     ME.attempts++;
 
     try {
@@ -900,22 +909,48 @@
         cycle = Math.max(cycle, backoff);
       }
 
-      // 无卡片时不刷新：document_idle 注入瞬间 Vue 尚未挂载、.buy-btn 还没渲染，此时判「无卡片」
-      // 并刷新会形成"刷新→未渲染→再刷新"死循环，永远轮不到卡片出现，也轮不到补货翻转检测。
-      // 改为短轮询等卡片渲染就绪；只有「有卡片但售罄」才按周期刷新拉最新库存。
+      // 「无卡片」两种成因，区别处理（关键：原地死等永远等不来卡片——SPA 不会自己重拉数据）：
+      //  (a) 页面刚加载、Vue 还没挂载完 → 宽限期内原地等几拍让卡片渲染（不刷新，避免"刷新→未渲染→再刷新"抖动）。
+      //  (b) 过了宽限期卡片仍没出现 = 卡片数据确实没拉到(疑似软限流) → 必须重载重拉，但要「慢」：
+      //      未达阈值也 ≥3s，达阈值用 backoff(默认12s)，给接口恢复时间，绝不高频刷把自己刷进更深的限流。
       if (!present) {
-        ME.noCardRounds = (ME.noCardRounds || 0) + 1;
-        if (backedOff) {
-          log("warn", "rate", "连续 " + ME.noCardRounds + " 轮无卡片(疑似软限流)，原地等待卡片渲染（不刷新），退避≈" + cycle + "ms");
-        } else {
-          log("info", "soldout", "无卡片(页面未渲染完)，原地轮询等待卡片就绪（不刷新）");
+        var sinceLoad = Date.now() - SCRIPT_START;
+        var GRACE_MS = 2000;
+        if (sinceLoad < GRACE_MS) {
+          // (a) 宽限期内：原地等卡片渲染
+          if (ME.retryTimer) { clearTimeout(ME.retryTimer); }
+          ME.retryTimer = setTimeout(function () {
+            ME.retryTimer = null;
+            if (ME.running && ME.buyPhase && !ME.finished && !ME.clickedBuy) tryBuy();
+          }, 300);
+          return;
         }
-        // 用较快的轮询等卡片出现；一旦出现，下一拍 onSoldOut 即会进入"有卡片"分支正常处理。
+        // (b) 过宽限期仍无卡片 → 慢速重载重拉（这正是修复"原地死等永不刷新→刷不出购买按钮"的关键）
+        var noCardCycle = backedOff
+          ? ((ME.config && ME.config.backoffReloadIntervalMs) || 12000)
+          : Math.max(cycle, 3000);
+        var sinceReloadNC = Date.now() - ME.lastReloadAt;
+        if (sinceReloadNC > Math.max(RELOAD_FLOOR_MS, noCardCycle)) {
+          ME.lastReloadAt = Date.now();
+          ME.noCardRounds = (ME.noCardRounds || 0) + 1; // 仅真正重载才计一轮，"连续N轮"才有意义
+          log("warn", "rate", "无卡片超宽限期(疑似软限流，连续 " + ME.noCardRounds + " 轮无卡重载) → 慢速重载重拉卡片（周期≈" + noCardCycle + "ms）");
+          saveRunFlag("running");
+          var ncTarget = reloadFreshUrl();
+          ME._reloadPending = true;
+          if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+          ME.reloadTimer = setTimeout(function () {
+            ME.reloadTimer = null;
+            ME._reloadPending = false;
+            try { location.replace(ncTarget); } catch (e) { try { location.reload(); } catch (e2) {} }
+          }, jitter(RELOAD_FLOOR_MS));
+          return;
+        }
+        // 还没到重载时刻：原地等到该刷新
         if (ME.retryTimer) { clearTimeout(ME.retryTimer); }
         ME.retryTimer = setTimeout(function () {
           ME.retryTimer = null;
-          if (ME.running && !ME.finished && !ME.clickedBuy) tryBuy();
-        }, Math.min(cycle, 800));
+          if (ME.running && ME.buyPhase && !ME.finished && !ME.clickedBuy) tryBuy();
+        }, 500);
         return;
       }
 
@@ -1238,6 +1273,7 @@
   function finishRun(status, success) {
     ME.finished = true;
     ME.running = false;
+    ME.buyPhase = false;
     ME.captchaWaiting = false;
     cleanupTimers();
     try { if (ME.observer) ME.observer.disconnect(); } catch (e) {}
@@ -1258,6 +1294,7 @@
 
   function stopRun(status) {
     ME.running = false;
+    ME.buyPhase = false;
     ME.captchaWaiting = false;
     ME._goActive = false; // 释放 go 幂等闸：停止后允许同一 fireAt 重新开抢（如再次布防/手动开抢）
     cleanupTimers();
@@ -1446,6 +1483,7 @@
   function runLoop(immediate) {
     if (ME.finished) return;
     ME.running = true;
+    ME.buyPhase = true; // 到点，正式进入买入窗口：此后才允许 tryBuy/observer 触发买入与刷新
     ME.startedAt = ME.startedAt || nowSrv(); // 记录循环起点，作为 isPastRetryUntil 在 fireAt 缺失时的回退基准
     setStatus("running");
     saveRunFlag(ME.clickedBuy ? "clicked-buy" : "running");
