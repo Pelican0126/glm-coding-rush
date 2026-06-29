@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GLM Coding 抢购助手",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "在已登录的 bigmodel 标签页内，于每日开售时刻检测补货并自动点击购买，验证码交由人工完成后自动下单占位（停在支付页，绝不自动付款/破解验证码）。",
   "permissions": ["storage", "alarms", "notifications", "tabs", "scripting"],
   "host_permissions": [
