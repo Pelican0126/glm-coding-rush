@@ -348,9 +348,7 @@ try {
   async function resyncOffset(tag) {
     try {
       if (!T || typeof T.sync !== "function") return 0;
-      // 3 采样取中位数（原 5）：对时只是 cookieless 的页面 GET（credentials:omit，syncApi 默认关），
-      // 偏移是稳定的系统时钟偏差非抖动，3 个足够；arm+preheat 合计从 ~10 次降到 ~6 次，少给开抢前添请求。
-      var off = await T.sync(TIME_SYNC_URL, 3);
+      var off = await T.sync(TIME_SYNC_URL, 5);
       await setState({ offsetMs: off });
       L.info(tag || "timesync", "时间偏移 offset=" + Math.round(off) + "ms (Date 头秒级，±500ms 由 advanceMs+重试补偿)");
       return off;
