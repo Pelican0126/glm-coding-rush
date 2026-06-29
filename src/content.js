@@ -889,10 +889,13 @@
     var strat = (ME.config && ME.config.triggerStrategy) || "hybrid";
     if (strat === "hybrid" || strat === "reload") {
       var cycle = (ME.config && ME.config.reloadIntervalMs) || 1200; // 刷新周期，默认 ~1.2s
-      // 自适应：距开抢(fireAt)超过 burstWindowMs(默认60s)后退避到 slowReloadIntervalMs(默认4s)，
-      // 前期猛刷抓秒放量/退单回流，长尾放缓更礼貌、少触发风控。
-      // 注：秒罄行情下放量几秒内售罄，60s 猛刷已足够覆盖，再长只是徒增 ~150 次卡片接口重拉、自我软限流。
-      var burst = (ME.config && ME.config.burstWindowMs) || 60000;
+      // 自适应：距开抢(fireAt)超过「爆发窗口」后退避到 slowReloadIntervalMs(默认4s)。
+      // 爆发窗口写死 60s、刻意不读 config.burstWindowMs，原因：
+      //  ① 秒罄行情放量几秒内售罄，60s 内 1.2s/次的猛刷已足够覆盖；再长只是徒增 ~150 次卡片接口重拉，
+      //     反而把自己刷进软限流（实测 2026-06-29：开抢前后过度重拉 → 到点出不来购买按钮 → 漏抢的主因）。
+      //  ② 老用户已保存的配置里仍是旧的 180s，改默认值盖不掉持久化的旧值；直接写死确保「重载扩展即生效、
+      //     无需手动改设置」。（slow 长尾间隔仍可在设置里调；只有这个爆发窗口固定 60s。）
+      var burst = 60000;
       var slow = (ME.config && ME.config.slowReloadIntervalMs) || 4000;
       if (ME.fireAt && (nowSrv() - ME.fireAt) > burst) cycle = Math.max(cycle, slow);
 
