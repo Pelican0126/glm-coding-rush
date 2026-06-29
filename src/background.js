@@ -71,7 +71,7 @@ try {
       advanceMs: 150,
       pollIntervalMs: 350,
       reloadIntervalMs: 1200,
-      burstWindowMs: 180000,
+      burstWindowMs: 60000,
       slowReloadIntervalMs: 4000,
       retryWindowMs: 3600000,
       dualTab: false,
@@ -83,8 +83,8 @@ try {
       notify: true,
       fallbackList: [], // 档位降级备选，元素 {tier,period}；主目标连续售罄达阈值后依次切换
       fallbackAfterRounds: 10, // 当前档位连续售罄多少轮(刷新)后降级到下一备选
-      noCardBackoffRounds: 3, // 连续多少轮「无卡片」后判定软限流并退避刷新间隔
-      backoffReloadIntervalMs: 12000, // 软限流退避时的刷新间隔
+      noCardBackoffRounds: 2, // 连续多少轮「无卡片」后判定软限流并大退避（无卡本身即限流信号，宜快escalate）
+      backoffReloadIntervalMs: 15000, // 软限流退避时的刷新间隔（给接口充分恢复时间）
       selectorOverrides: {},
       maxTabs: 2
     };
@@ -348,7 +348,9 @@ try {
   async function resyncOffset(tag) {
     try {
       if (!T || typeof T.sync !== "function") return 0;
-      var off = await T.sync(TIME_SYNC_URL, 5);
+      // 3 采样取中位数（原 5）：对时只是 cookieless 的页面 GET（credentials:omit，syncApi 默认关），
+      // 偏移是稳定的系统时钟偏差非抖动，3 个足够；arm+preheat 合计从 ~10 次降到 ~6 次，少给开抢前添请求。
+      var off = await T.sync(TIME_SYNC_URL, 3);
       await setState({ offsetMs: off });
       L.info(tag || "timesync", "时间偏移 offset=" + Math.round(off) + "ms (Date 头秒级，±500ms 由 advanceMs+重试补偿)");
       return off;

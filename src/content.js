@@ -889,9 +889,10 @@
     var strat = (ME.config && ME.config.triggerStrategy) || "hybrid";
     if (strat === "hybrid" || strat === "reload") {
       var cycle = (ME.config && ME.config.reloadIntervalMs) || 1200; // 刷新周期，默认 ~1.2s
-      // 自适应：距开抢(fireAt)超过 burstWindowMs(默认3min)后退避到 slowReloadIntervalMs(默认4s)，
+      // 自适应：距开抢(fireAt)超过 burstWindowMs(默认60s)后退避到 slowReloadIntervalMs(默认4s)，
       // 前期猛刷抓秒放量/退单回流，长尾放缓更礼貌、少触发风控。
-      var burst = (ME.config && ME.config.burstWindowMs) || 180000;
+      // 注：秒罄行情下放量几秒内售罄，60s 猛刷已足够覆盖，再长只是徒增 ~150 次卡片接口重拉、自我软限流。
+      var burst = (ME.config && ME.config.burstWindowMs) || 60000;
       var slow = (ME.config && ME.config.slowReloadIntervalMs) || 4000;
       if (ME.fireAt && (nowSrv() - ME.fireAt) > burst) cycle = Math.max(cycle, slow);
 
@@ -902,17 +903,18 @@
         log("info", "rate", "卡片已恢复，退出限流退避");
         ME.noCardRounds = 0;
       }
-      var N = (ME.config && ME.config.noCardBackoffRounds) || 3;
+      var N = (ME.config && ME.config.noCardBackoffRounds) || 2;
       var backedOff = (!present && (ME.noCardRounds || 0) >= N);
       if (backedOff) {
-        var backoff = (ME.config && ME.config.backoffReloadIntervalMs) || 12000;
+        var backoff = (ME.config && ME.config.backoffReloadIntervalMs) || 15000;
         cycle = Math.max(cycle, backoff);
       }
 
       // 「无卡片」两种成因，区别处理（关键：原地死等永远等不来卡片——SPA 不会自己重拉数据）：
       //  (a) 页面刚加载、Vue 还没挂载完 → 宽限期内原地等几拍让卡片渲染（不刷新，避免"刷新→未渲染→再刷新"抖动）。
       //  (b) 过了宽限期卡片仍没出现 = 卡片数据确实没拉到(疑似软限流) → 必须重载重拉，但要「慢」：
-      //      未达阈值也 ≥3s，达阈值用 backoff(默认12s)，给接口恢复时间，绝不高频刷把自己刷进更深的限流。
+      //      无卡片本身就是限流信号，故未达阈值也 ≥8s，达阈值用 backoff(默认15s)，给接口充分恢复时间；
+      //      若仍 3s 一刷只会正反馈加深限流——这正是「被限流后越刷越糟」要避免的。
       if (!present) {
         var sinceLoad = Date.now() - SCRIPT_START;
         var GRACE_MS = 2000;
@@ -927,8 +929,8 @@
         }
         // (b) 过宽限期仍无卡片 → 慢速重载重拉（这正是修复"原地死等永不刷新→刷不出购买按钮"的关键）
         var noCardCycle = backedOff
-          ? ((ME.config && ME.config.backoffReloadIntervalMs) || 12000)
-          : Math.max(cycle, 3000);
+          ? ((ME.config && ME.config.backoffReloadIntervalMs) || 15000)
+          : Math.max(cycle, 8000);
         var sinceReloadNC = Date.now() - ME.lastReloadAt;
         if (sinceReloadNC > Math.max(RELOAD_FLOOR_MS, noCardCycle)) {
           ME.lastReloadAt = Date.now();
@@ -1458,11 +1460,13 @@
       log("warn", "resume", "断点恢复，phase=" + ph);
       ME.running = true;
       if (ph === "captcha-wait" || ph === "clicked-buy") {
+        ME.buyPhase = true; // 这些阶段必在 fireAt 之后，buyPhase 应为 true（逻辑一致；observer 仍被 clickedBuy 挡住）
         ME.clickedBuy = true;
         startWaitCaptchaPass();
         return;
       }
       if (ph === "ordered" || ph === "reached-payment") {
+        ME.buyPhase = true;
         ME.clickedBuy = true; ME.confirmClicked = true;
         waitForPaymentPage();
         return;
