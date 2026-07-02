@@ -46,7 +46,7 @@
     {
       "matches": ["https://open.bigmodel.cn/*", "https://bigmodel.cn/*"],
       "run_at": "document_idle",
-      "js": ["src/selectors.js", "src/logger.js", "src/timesync.js", "src/content.js"]
+      "js": ["src/selectors.js", "src/logger.js", "src/timesync.js", "src/pacing.js", "src/content.js"]
     }
   ]
 }
