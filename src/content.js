@@ -551,9 +551,14 @@
           log("info", "spin", "T-15s 预热中…");
           saveRunFlag("preheat");
         }
-        // 距离较远时降频（节流，避免空转），临近时用 rAF 自旋
+        // 距离较远时降频（节流，避免空转），临近时用 rAF 自旋。
+        // 关键：隐藏/后台标签里 Chrome 完全不触发 rAF——若临近 T0 用户恰好切走了标签，
+        // 纯 rAF 会让倒计时冻住、永不开火（漏抢）。隐藏时退化为 setTimeout（后台标签
+        // 被钳到 ~1s 粒度，最多迟 ~1s，远好于不触发）；切回可见后下一拍自动恢复 rAF 精度。
         if (remain > 2000) {
           setTimeout(tick, 200);
+        } else if (document.hidden) {
+          setTimeout(tick, 50);
         } else {
           requestAnimationFrame(tick);
         }
@@ -688,7 +693,13 @@
           ME.lastReloadAt = Date.now();
           saveRunFlag("running");
           var vt = reloadFreshUrl();
-          setTimeout(function () { try { location.replace(vt); } catch (e) { try { location.reload(); } catch (e2) {} } }, jitter(RELOAD_FLOOR_MS));
+          ME._reloadPending = true; // 与其它重载点一致：走 reloadTimer，stop/撤防时可被 cleanupTimers 拦掉
+          if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+          ME.reloadTimer = setTimeout(function () {
+            ME.reloadTimer = null;
+            ME._reloadPending = false;
+            try { location.replace(vt); } catch (e) { try { location.reload(); } catch (e2) {} }
+          }, jitter(RELOAD_FLOOR_MS));
           return;
         }
         scheduleNextAttempt();
