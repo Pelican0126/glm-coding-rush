@@ -986,7 +986,9 @@
           ME.reloadTimer = null;
           ME._reloadPending = false;
           try { location.replace(target); } catch (e) { try { location.reload(); } catch (e2) {} }
-        }, jitter(RELOAD_FLOOR_MS));
+        // 开抢后头 5s 黄金窗口:0ms 立即执行(重载节奏已由上方周期闸保证 ≥ 地板/周期,
+        // 不违反礼貌限速);窗口外回到 jitter(250ms) 抖动。省下的 ~175-325ms 全在关键路径上。
+        }, P.reloadDelayMs(elapsedSinceFire, RELOAD_FLOOR_MS, jitter));
         return;
       }
     }
