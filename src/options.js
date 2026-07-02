@@ -31,7 +31,6 @@
     advanceMs: 150,
     pollIntervalMs: 350,
     reloadIntervalMs: 1200,
-    burstWindowMs: 60000,
     slowReloadIntervalMs: 4000,
     retryWindowMs: 3600000,
     dualTab: false,
@@ -171,9 +170,6 @@
       if ($("f-reloadIntervalMs"))
         $("f-reloadIntervalMs").value =
           c.reloadIntervalMs != null ? c.reloadIntervalMs : DEFAULT_CONFIG.reloadIntervalMs;
-      if ($("f-burstWindowSec"))
-        $("f-burstWindowSec").value =
-          Math.round((c.burstWindowMs != null ? c.burstWindowMs : DEFAULT_CONFIG.burstWindowMs) / 1000);
       if ($("f-slowReloadIntervalMs"))
         $("f-slowReloadIntervalMs").value =
           c.slowReloadIntervalMs != null ? c.slowReloadIntervalMs : DEFAULT_CONFIG.slowReloadIntervalMs;
@@ -315,14 +311,6 @@
         fail("reloadIntervalMs", "应为 " + POLL_FLOOR + " ~ 10000 的整数（毫秒）。");
         cfg.reloadIntervalMs = DEFAULT_CONFIG.reloadIntervalMs;
       } else { cfg.reloadIntervalMs = clampInt(rl, POLL_FLOOR, 10000); }
-
-      // --- burstWindowSec（猛刷时长，秒 → ms）---
-      var bwRaw = $("f-burstWindowSec") ? $("f-burstWindowSec").value : "";
-      var bw = parseInt(bwRaw, 10);
-      if (bwRaw === "" || isNaN(bw) || bw < 0 || bw > 3600) {
-        fail("burstWindow", "应为 0 ~ 3600 的整数（秒）。");
-        cfg.burstWindowMs = DEFAULT_CONFIG.burstWindowMs;
-      } else { cfg.burstWindowMs = bw * 1000; }
 
       // --- slowReloadIntervalMs（退避后刷新周期，下限 250）---
       var srRaw = $("f-slowReloadIntervalMs") ? $("f-slowReloadIntervalMs").value : "";

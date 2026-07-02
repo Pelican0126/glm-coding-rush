@@ -71,7 +71,6 @@ try {
       advanceMs: 150,
       pollIntervalMs: 350,
       reloadIntervalMs: 1200,
-      burstWindowMs: 60000,
       slowReloadIntervalMs: 4000,
       retryWindowMs: 3600000,
       dualTab: false,

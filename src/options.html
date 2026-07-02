@@ -426,11 +426,10 @@
           <label class="k" for="f-burstWindowSec">猛刷时长 burstWindow</label>
           <div class="v">
             <div class="with-unit">
-              <input type="number" id="f-burstWindowSec" class="tiny" min="0" max="3600" step="10" />
+              <input type="number" id="f-burstWindowSec" class="tiny" value="60" disabled />
               <span class="unit">秒</span>
             </div>
-            <div class="hint">开抢后前多少秒用"刷新周期"猛刷，之后退避到"放缓周期"。默认 180=3 分钟。</div>
-            <div class="err">应为 0 ~ 3600 的整数（秒）。</div>
+            <div class="hint">已固定 60 秒（防开抢后过度重拉把自己刷进软限流，2026-06-29 实测教训），不可配置。之后节奏：5 分钟内按「慢速刷新间隔」，5-15 分钟 8 秒，更久 15 秒。</div>
           </div>
         </div>
 
