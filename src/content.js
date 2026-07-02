@@ -558,6 +558,26 @@
           log("info", "spin", "T-15s 预热中…");
           saveRunFlag("preheat");
         }
+        // T-2.5s 一次性预刷新(决策在 GLM.pacing.shouldPreReload,含幂等闸):
+        // 让 T0 第一拍看到 ~2s 新的数据,而非 T-90s 预热时的旧数据;若站点提前几秒
+        // 翻牌(运营手动放量常见),T0 一到立即命中,省掉整整一轮重载(~1.2s)。
+        // 仅 hybrid/reload 策略需要;dryRun 下同样执行(只是导航,无副作用)。
+        var strat = (ME.config && ME.config.triggerStrategy) || "hybrid";
+        if ((strat === "hybrid" || strat === "reload") &&
+            P.shouldPreReload(remain, Date.now() - SCRIPT_START)) {
+          log("info", "spin", "T-" + (Math.round(remain / 100) / 10) + "s 预刷新:拉最新卡片数据后继续倒计时");
+          saveRunFlag("countdown"); // 重载后 init→resume(countdown)→重新进入精确等待
+          ME.lastReloadAt = Date.now();
+          var pr = reloadFreshUrl();
+          ME._reloadPending = true;
+          if (ME.reloadTimer) { clearTimeout(ME.reloadTimer); }
+          ME.reloadTimer = setTimeout(function () {
+            ME.reloadTimer = null;
+            ME._reloadPending = false;
+            try { location.replace(pr); } catch (e) { try { location.reload(); } catch (e2) {} }
+          }, 0);
+          return; // 本页即将卸载,终止本 tick 链;新页 resume 后重启倒计时
+        }
         // 距离较远时降频（节流，避免空转），临近时用 rAF 自旋。
         // 关键：隐藏/后台标签里 Chrome 完全不触发 rAF——若临近 T0 用户恰好切走了标签，
         // 纯 rAF 会让倒计时冻住、永不开火（漏抢）。隐藏时退化为 setTimeout（后台标签
