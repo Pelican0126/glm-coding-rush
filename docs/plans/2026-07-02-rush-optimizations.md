@@ -17,7 +17,7 @@
 - **所有排队重载必须走 `ME.reloadTimer` + `ME._reloadPending`**,保证撤防/stop 时可被 `cleanupTimers()` 拦掉(2026-06-25「撤防无效」事故的约定)。
 - classic script:新文件必须是 IIFE、挂 `self.GLM`,不用 `import/export`;`content.js` 引用方式为 `var P = G.pacing || {}`(与 27-32 行的 S/L/T 同款防御式)。
 - 公开仓库:不得引入任何密钥/个人信息;提交信息用中文、结尾带 `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`。
-- 每个任务收尾必须通过:改动文件的 `node --check` + `node --test tests/`(Task 1 起)。
+- 每个任务收尾必须通过:改动文件的 `node --check` + `node --test "tests/*.test.js"`(Task 1 起)。
 
 ## 非目标(YAGNI,明确不做)
 
@@ -50,7 +50,7 @@
 
 ### 怎么 review(每任务自审 + 终审)
 
-**每任务自审 gate(写在各任务最后一步)**:改动文件 `node --check`、`node --test tests/` 全绿、diff 逐行读一遍确认没夹带无关改动。
+**每任务自审 gate(写在各任务最后一步)**:改动文件 `node --check`、`node --test "tests/*.test.js"` 全绿、diff 逐行读一遍确认没夹带无关改动。
 
 **终审(Task 6)用"本仓病灶透镜"逐条过 diff**——每条都是这个仓真实踩过的坑:
 
@@ -62,7 +62,7 @@
 | 4 | 重载前是否 `saveRunFlag(正确 phase)`?`lastReloadAt` 是否维持"跨重载还原"语义? | 重载后 since 恒天文数字→死循环刷新 |
 | 5 | 隐藏标签下行为:有没有依赖 rAF/未钳制 timer 的精确计时? | 后台标签倒计时冻结→漏抢 |
 | 6 | **请求量算账**:改动前后"每小时重载次数"给出具体数字对比 | 软限流主因 |
-| 7 | `node --check` 全部 src/*.js + `node --test tests/` + 敏感信息 grep | 公开仓库 |
+| 7 | `node --check` 全部 src/*.js + `node --test "tests/*.test.js"` + 敏感信息 grep | 公开仓库 |
 
 **终审执行方式**:跑 `/code-review`(高档)审当前 diff,或派一个没写过这些代码的 fresh subagent 拿上表逐条核;报告里每条透镜要么"过",要么给出行号级反例。
 
@@ -91,7 +91,7 @@
 创建 `tests/pacing.test.js`:
 
 ```js
-/* pacing.js 纯函数单测 — node --test tests/ 运行(Node ≥18,本机 v24) */
+/* pacing.js 纯函数单测 — node --test "tests/*.test.js" 运行(Node ≥18,本机 v24) */
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -183,7 +183,7 @@ test("shouldPreReload: 自定义窗口/最小页龄生效", () => {
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && node --test tests/
+cd "D:/code/23-Z.ai抢购" && node --test "tests/*.test.js"
 ```
 预期:**FAIL**,报 `Cannot find module '../src/pacing.js'`。
 
@@ -264,7 +264,7 @@ cd "D:/code/23-Z.ai抢购" && node --test tests/
 - [ ] **Step 4: 跑测试确认全绿**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && node --check src/pacing.js && node --test tests/
+cd "D:/code/23-Z.ai抢购" && node --check src/pacing.js && node --test "tests/*.test.js"
 ```
 预期:`# pass 17`、`# fail 0`。
 
@@ -341,7 +341,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - [ ] **Step 3: 校验**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && node --check src/content.js && node --test tests/
+cd "D:/code/23-Z.ai抢购" && node --check src/content.js && node --test "tests/*.test.js"
 ```
 预期:两者全过。
 
@@ -401,7 +401,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - [ ] **Step 2: 校验**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && node --check src/content.js && node --test tests/
+cd "D:/code/23-Z.ai抢购" && node --check src/content.js && node --test "tests/*.test.js"
 ```
 预期:全过。
 
@@ -460,7 +460,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - [ ] **Step 2: 校验**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && node --check src/content.js && node --test tests/
+cd "D:/code/23-Z.ai抢购" && node --check src/content.js && node --test "tests/*.test.js"
 ```
 预期:全过。
 
@@ -530,7 +530,7 @@ grep `burstWindow` 定位并删除:
 - [ ] **Step 4: 校验**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && node --check src/options.js && node --check src/background.js && node --test tests/ && grep -rn "burstWindow" src/ | grep -v "options.html" || echo "clean"
+cd "D:/code/23-Z.ai抢购" && node --check src/options.js && node --check src/background.js && node --test "tests/*.test.js" && grep -rn "burstWindow" src/ | grep -v "options.html" || echo "clean"
 ```
 预期:check 全过、测试全绿、最后输出 `clean`(仅 options.html 剩展示用字段)。
 
@@ -560,7 +560,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - [ ] **Step 1: 全量静态校验**
 
 ```bash
-cd "D:/code/23-Z.ai抢购" && for f in src/*.js; do node --check "$f" || echo "FAIL: $f"; done && node --test tests/ && node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest OK')"
+cd "D:/code/23-Z.ai抢购" && for f in src/*.js; do node --check "$f" || echo "FAIL: $f"; done && node --test "tests/*.test.js" && node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest OK')"
 ```
 预期:无 FAIL、测试 `# fail 0`、`manifest OK`。
 
